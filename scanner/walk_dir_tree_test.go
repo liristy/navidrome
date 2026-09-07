@@ -78,6 +78,15 @@ var _ = Describe("walk_dir_tree", func() {
 				return folders
 			}
 
+			It("discovers STRM tracks and respects ignore rules", func() {
+				files := fsys.(*mockMusicFS).FS.(fstest.MapFS)
+				files["root/a/remote.STRM"] = &fstest.MapFile{Data: []byte("https://nas/song.flac")}
+				files["root/a/ignored/remote.strm"] = &fstest.MapFile{Data: []byte("https://nas/ignored.flac")}
+				folders := getFolders()
+				Expect(folders["root/a"].audioFiles).To(HaveKey("remote.STRM"))
+				Expect(folders["root/a/ignored"].audioFiles).ToNot(HaveKey("remote.strm"))
+			})
+
 			DescribeTable("symlink handling",
 				func(followSymlinks bool, expectedFolderCount int) {
 					conf.Server.Scanner.FollowSymlinks = followSymlinks

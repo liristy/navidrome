@@ -25,6 +25,13 @@ type SymlinkResolverFS interface {
 	ResolveSymlink(name string) (string, error)
 }
 
+// STRMTargetResolverFS is an optional capability for trusted local pointer
+// targets. Callers use it only after a track is known to be STRM; HTTP targets
+// are intentionally never returned.
+type STRMTargetResolverFS interface {
+	ResolveSTRMTarget(name string) (string, error)
+}
+
 // Watcher is a storage with the ability watch the FS and notify changes
 type Watcher interface {
 	// Start starts a watcher on the whole FS and returns a channel to send detected changes.

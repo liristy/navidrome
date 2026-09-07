@@ -15,6 +15,7 @@ import (
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/utils"
+	"github.com/navidrome/navidrome/utils/sidecar"
 )
 
 // walkDirTree recursively walks the directory tree starting from the given targetFolders.
@@ -161,6 +162,8 @@ func loadDir(ctx context.Context, job *scanJob, dirPath string, checker *IgnoreC
 			case model.IsImageFile(name):
 				folder.imageFiles[entry.Name()] = entry
 				folder.imagesUpdatedAt = utils.TimeNewest(folder.imagesUpdatedAt, fileInfo.ModTime(), folder.modTime)
+			case conf.Server.Scanner.Sidecar.Enabled && sidecar.IsNFO(name):
+				folder.sidecarFiles[entry.Name()] = entry
 			}
 		}
 	}

@@ -33,6 +33,27 @@ var _ = Describe("Archiver", func() {
 	})
 
 	Context("ZipAlbum", func() {
+		It("downloads STRM audio with the source extension instead of pointer text", func() {
+			mfs := model.MediaFiles{{Path: "music/01 - remote.STRM", Suffix: "flac", AlbumID: "1", Album: "Album"}}
+			mfRepo := &mockMediaFileRepository{}
+			mfRepo.On("GetAll", mock.Anything).Return(mfs, nil)
+			ds.On("MediaFile", mock.Anything).Return(mfRepo)
+			ms.On("NewStream", mock.Anything, mock.Anything, stream.Request{Format: "raw"}).Return(io.NopCloser(strings.NewReader("remote audio")), nil).Once()
+			out := new(bytes.Buffer)
+			Expect(arch.ZipAlbum(context.Background(), "1", "raw", 0, out)).To(Succeed())
+			zr, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(zr.File).To(HaveLen(1))
+			Expect(zr.File[0].Name).To(Equal("Album/01 - remote.flac"))
+			r, err := zr.File[0].Open()
+			Expect(err).ToNot(HaveOccurred())
+			defer r.Close()
+			data, err := io.ReadAll(r)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(data)).To(Equal("remote audio"))
+			ms.AssertExpectations(GinkgoT())
+		})
+
 		It("zips an album correctly", func() {
 			mfs := model.MediaFiles{
 				{Path: "test_data/01 - track1.mp3", Suffix: "mp3", AlbumID: "1", Album: "Album/Promo", DiscNumber: 1},

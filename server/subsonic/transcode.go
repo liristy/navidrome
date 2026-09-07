@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path"
 	"slices"
 	"strconv"
 
+	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/core/ffmpeg"
 	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/log"
@@ -15,6 +18,7 @@ import (
 	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/server/subsonic/responses"
 	"github.com/navidrome/navidrome/utils/req"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 // API-layer request structs for JSON unmarshaling (decoupled from core structs)
@@ -320,7 +324,9 @@ func (api *Router) GetTranscodeDecision(w http.ResponseWriter, r *http.Request) 
 		return nil, newError(code, "failed to make transcode decision: %s", reason)
 	}
 
-	// Only create a token when there is a valid playback path
+	// Keep the negotiated playback contract, including for STRM. The stream
+	// endpoint handles the opt-in Redia direct-play redirect after validating
+	// this token, without discarding required transcoding parameters.
 	var transcodeParams string
 	if decision.CanDirectPlay || decision.CanTranscode {
 		transcodeParams, err = api.transcodeDecision.CreateTranscodeParams(decision)
@@ -417,6 +423,30 @@ func (api *Router) GetTranscodeStream(w http.ResponseWriter, r *http.Request) (*
 		return nil, nil
 	}
 
+	// Only opt-in, allowlisted local STRM direct play uses the classic Redia
+	// endpoint. HTTP pointers and negotiated transcodes retain the native flow.
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) &&
+		conf.Server.STRM.ForceReportRealPath && mf.IsStrm &&
+		strm.AllowedLocalPath(mf.StrmTarget, conf.Server.STRM.LocalRoots) &&
+		(streamReq.Format == "" || streamReq.Format == "raw") {
+		query := r.URL.Query()
+		query.Set("id", mediaID)
+		query.Set("format", "raw")
+		query.Set("timeOffset", strconv.Itoa(streamReq.Offset))
+		query.Del("maxBitRate")
+		query.Del("mediaId")
+		query.Del("mediaType")
+		query.Del("transcodeParams")
+		query.Del("offset")
+		// Use a same-origin absolute path: some clients cannot follow ./stream.
+		// Join collapses leading slashes and URL.String escapes special path
+		// characters, while preserving the endpoint's BaseURL prefix.
+		location := url.URL{Path: path.Join("/", path.Dir(r.URL.Path), "stream"), RawQuery: query.Encode()}
+		w.Header().Set("Location", location.String())
+		w.WriteHeader(http.StatusTemporaryRedirect)
+		return nil, nil
+	}
+
 	// Create stream
 	stream, err := api.streamer.NewStream(ctx, mf, streamReq)
 	if err != nil {
@@ -434,8 +464,8 @@ func (api *Router) GetTranscodeStream(w http.ResponseWriter, r *http.Request) (*
 
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
-	n, err := stream.Serve(ctx, w, r)
-	if err != nil || n == 0 {
+	_, err = stream.Serve(ctx, w, r)
+	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 	}
 	return nil, nil

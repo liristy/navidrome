@@ -441,6 +441,23 @@ var _ = Describe("folder_entry", func() {
 				Expect(hash1).ToNot(Equal(hash2))
 			})
 
+			It("produces different hash when an NFO sidecar is added or edited", func() {
+				baseTime := time.Now()
+				hashWithoutNFO := entry.hash()
+				entry.sidecarFiles["song.nfo"] = &fakeDirEntry{
+					name:     "song.nfo",
+					fileInfo: &fakeFileInfo{name: "song.nfo", size: 1000, modTime: baseTime},
+				}
+				hashWithNFO := entry.hash()
+				Expect(hashWithNFO).ToNot(Equal(hashWithoutNFO))
+
+				entry.sidecarFiles["song.nfo"] = &fakeDirEntry{
+					name:     "song.nfo",
+					fileInfo: &fakeFileInfo{name: "song.nfo", size: 1001, modTime: baseTime.Add(time.Second)},
+				}
+				Expect(entry.hash()).ToNot(Equal(hashWithNFO))
+			})
+
 			It("produces valid hex-encoded hash", func() {
 				hash := entry.hash()
 				Expect(hash).To(HaveLen(32)) // MD5 hash should be 32 hex characters

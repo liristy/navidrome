@@ -16,13 +16,18 @@ import (
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/utils/slice"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 type Info struct {
+	Suffix          string // Optional source format override (e.g. for STRM pointers).
+	StrmTarget      string // Allowlisted local target exposed to Redia-compatible native API clients.
+	SizeOverride    *int64 // Optional source content size (e.g. the target of a local STRM pointer).
 	FileInfo        FileInfo
 	Tags            model.RawTags
 	AudioProperties AudioProperties
 	HasPicture      bool
+	LyricsJSON      string // Optional validated sidecar lyric list, already in MediaFile JSON form.
 }
 
 type FileInfo interface {
@@ -74,22 +79,41 @@ func New(filePath string, info Info) Metadata {
 		tags:       clean(filePath, info.Tags),
 		audioProps: info.AudioProperties,
 		hasPicture: info.HasPicture,
+		lyricsJSON: info.LyricsJSON,
+		suffix:     info.Suffix,
+		strmTarget: info.StrmTarget,
+		size:       info.SizeOverride,
 	}
 }
 
 type Metadata struct {
+	suffix     string
 	filePath   string
 	fileInfo   FileInfo
 	tags       model.Tags
 	audioProps AudioProperties
 	hasPicture bool
+	lyricsJSON string
+	strmTarget string
+	size       *int64
 }
 
 func (md Metadata) FilePath() string     { return md.filePath }
 func (md Metadata) ModTime() time.Time   { return md.fileInfo.ModTime() }
 func (md Metadata) BirthTime() time.Time { return md.fileInfo.BirthTime() }
-func (md Metadata) Size() int64          { return md.fileInfo.Size() }
+func (md Metadata) Size() int64 {
+	if md.size != nil {
+		return *md.size
+	}
+	if strm.IsFile(md.filePath) {
+		return 0 // Remote content size is unknown, not the size of the pointer text.
+	}
+	return md.fileInfo.Size()
+}
 func (md Metadata) Suffix() string {
+	if md.suffix != "" {
+		return md.suffix
+	}
 	return strings.ToLower(strings.TrimPrefix(path.Ext(md.filePath), "."))
 }
 func (md Metadata) AudioProperties() AudioProperties         { return md.audioProps }

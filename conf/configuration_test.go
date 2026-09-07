@@ -37,6 +37,66 @@ var _ = Describe("Configuration", func() {
 		}))
 	})
 
+	Describe("STRM local roots", func() {
+		It("disables local pointers by default", func() {
+			conf.Load(true)
+			Expect(conf.Server.STRM.LocalRoots).To(BeEmpty())
+			Expect(conf.Server.STRM.ForceReportRealPath).To(BeFalse())
+		})
+		It("loads media-only allowlisted roots", func() {
+			viper.Set("strm.localroots", []string{"/CloudNAS/CloudDrive/115/音乐库"})
+			conf.Load(true)
+			Expect(conf.Server.STRM.LocalRoots).To(Equal([]string{"/CloudNAS/CloudDrive/115/音乐库"}))
+		})
+		It("loads the explicit reverse-proxy reporting environment option", func() {
+			GinkgoT().Setenv("ND_STRM_FORCEREPORTREALPATH", "true")
+			conf.InitConfig("", true)
+			conf.Load(true)
+			Expect(conf.Server.STRM.ForceReportRealPath).To(BeTrue())
+		})
+	})
+
+	Describe("STRM sidecar compatibility", func() {
+		It("keeps sidecar generation and local target probing disabled by default", func() {
+			conf.Load(true)
+			Expect(conf.Server.Scanner.Sidecar.Enabled).To(BeFalse())
+			Expect(conf.Server.Scanner.Sidecar.GenerateOnStartup).To(BeFalse())
+			Expect(conf.Server.STRM.Metadata.ProbeLocalTargets).To(BeFalse())
+			Expect(conf.Server.STRM.Metadata.ProbeConcurrency).To(Equal(2))
+		})
+
+		It("loads the legacy environment names used by the Redia image", func() {
+			GinkgoT().Setenv("ND_SCANNER_ENABLESIDECAR", "true")
+			GinkgoT().Setenv("ND_SCANNER_SIDECARFORMAT", "NFO")
+			GinkgoT().Setenv("ND_SCANNER_SIDECARREADONLY", "true")
+			GinkgoT().Setenv("ND_SCANNER_SIDECARGENERATEONSTARTUP", "true")
+			GinkgoT().Setenv("ND_SCANNER_SIDECARTRUSTMODE", "true")
+			GinkgoT().Setenv("ND_SCANNER_SIDECARDELETEONPURGE", "true")
+			conf.InitConfig("", true)
+			conf.Load(true)
+
+			Expect(conf.Server.Scanner.Sidecar.Enabled).To(BeTrue())
+			Expect(conf.Server.Scanner.Sidecar.Format).To(Equal("nfo"))
+			Expect(conf.Server.Scanner.Sidecar.ReadOnly).To(BeTrue())
+			Expect(conf.Server.Scanner.Sidecar.GenerateOnStartup).To(BeTrue())
+			Expect(conf.Server.Scanner.Sidecar.Trust).To(BeTrue())
+			Expect(conf.Server.Scanner.Sidecar.DeleteOnPurge).To(BeTrue())
+		})
+
+		It("loads the new nested target-probe options", func() {
+			viper.Set("strm.metadata.probelocaltargets", true)
+			viper.Set("strm.metadata.probeconcurrency", 3)
+			conf.Load(true)
+			Expect(conf.Server.STRM.Metadata.ProbeLocalTargets).To(BeTrue())
+			Expect(conf.Server.STRM.Metadata.ProbeConcurrency).To(Equal(3))
+		})
+
+		It("rejects unsupported sidecar formats", func() {
+			viper.Set("scanner.sidecar.format", "json")
+			Expect(func() { conf.Load(true) }).To(PanicWith(ContainSubstring("Scanner.Sidecar.Format")))
+		})
+	})
+
 	Describe("ParseLanguages", func() {
 		It("parses single language", func() {
 			Expect(conf.ParseLanguages("en")).To(Equal([]string{"en"}))

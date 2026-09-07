@@ -15,8 +15,10 @@ import (
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/core/agents"
 	"github.com/navidrome/navidrome/core/ffmpeg"
+	"github.com/navidrome/navidrome/core/storage"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/persistence"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 // resolution is one attempted acquisition outcome for an entity.
@@ -511,6 +513,27 @@ func resolveEmbedded(ctx context.Context, lib libraryView, ffm ffmpeg.FFmpeg, em
 	if embedRel == "" {
 		return resolution{}, false
 	}
+	if strm.IsFile(embedRel) {
+		if covers := strmSidecarCovers(lib.FS, embedRel); len(covers) > 0 {
+			stem := strings.TrimSuffix(path.Base(embedRel), path.Ext(embedRel))
+			r, coverPath, err := fromExternalFile(ctx, lib.FS, covers, strings.ToLower(stem)+"-cover.*")()
+			if r != nil {
+				return resolution{reader: r, source: "embedded", sourcePath: lib.Abs(coverPath), refMtime: mtimeViaFS(lib.FS, coverPath)}, true
+			}
+			if errors.Is(err, errSourceUnreadable) {
+				return resolution{localError: true}, false
+			}
+		}
+		if resolver, ok := lib.FS.(storage.STRMTargetResolverFS); ok {
+			if target, err := resolver.ResolveSTRMTarget(embedRel); err == nil {
+				if reader, sourcePath, extractErr := fromFFmpegTag(ctx, ffm, target)(); reader != nil {
+					return resolution{reader: reader, source: "embedded", sourcePath: sourcePath, refMtime: mtimeOf(target)}, true
+				} else if extractErr != nil {
+					return resolution{localError: true}, false
+				}
+			}
+		}
+	}
 	abs := lib.Abs(embedRel)
 	var unreadable bool
 	for _, sf := range []sourceFunc{fromTag(ctx, lib.FS, embedRel), fromFFmpegTag(ctx, ffm, abs)} {
@@ -521,6 +544,26 @@ func resolveEmbedded(ctx context.Context, lib libraryView, ffm ffmpeg.FFmpeg, em
 		unreadable = unreadable || errors.Is(err, errSourceUnreadable)
 	}
 	return resolution{localError: unreadable}, false
+}
+
+func strmSidecarCovers(fsys fs.FS, mediaPath string) []string {
+	dir := path.Dir(mediaPath)
+	entries, err := fs.ReadDir(fsys, dir)
+	if err != nil {
+		return nil
+	}
+	want := strings.TrimSuffix(path.Base(mediaPath), path.Ext(mediaPath)) + "-cover"
+	var covers []string
+	for _, entry := range entries {
+		if entry.IsDir() || !model.IsImageFile(entry.Name()) {
+			continue
+		}
+		stem := strings.TrimSuffix(entry.Name(), path.Ext(entry.Name()))
+		if strings.EqualFold(stem, want) {
+			covers = append(covers, path.Join(dir, entry.Name()))
+		}
+	}
+	return covers
 }
 
 // resolveFolderSource turns a source that yields a library-relative image path into a folder

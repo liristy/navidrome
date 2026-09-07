@@ -24,6 +24,7 @@ func newFolderEntry(job *scanJob, id, path string, info model.FolderUpdateInfo) 
 		audioFiles:          make(map[string]fs.DirEntry),
 		imageFiles:          make(map[string]fs.DirEntry),
 		playlistFiles:       make(map[string]fs.DirEntry),
+		sidecarFiles:        make(map[string]fs.DirEntry),
 		albumIDMap:          make(map[string]string),
 		updTime:             info.UpdatedAt,
 		prevHash:            info.Hash,
@@ -43,6 +44,7 @@ type folderEntry struct {
 	audioFiles      map[string]fs.DirEntry
 	imageFiles      map[string]fs.DirEntry
 	playlistFiles   map[string]fs.DirEntry
+	sidecarFiles    map[string]fs.DirEntry
 	numSubFolders   int
 	imagesUpdatedAt time.Time
 	prevHash        string // Previous hash from DB
@@ -121,6 +123,8 @@ func (f *folderEntry) hash() string {
 	slices.Sort(imageKeys)
 	playlistKeys := slices.Collect(maps.Keys(f.playlistFiles))
 	slices.Sort(playlistKeys)
+	sidecarKeys := slices.Collect(maps.Keys(f.sidecarFiles))
+	slices.Sort(sidecarKeys)
 
 	// Include audio files with their size and modtime
 	for _, key := range audioKeys {
@@ -143,6 +147,15 @@ func (f *folderEntry) hash() string {
 	for _, key := range playlistKeys {
 		_, _ = io.WriteString(h, key)
 		if info, err := f.playlistFiles[key].Info(); err == nil {
+			_, _ = fmt.Fprintf(h, ":%d:%s", info.Size(), info.ModTime().UTC().String())
+		}
+	}
+
+	// Include NFO files explicitly: cloud/FUSE synchronizers may preserve the
+	// directory mtime while changing sidecar content.
+	for _, key := range sidecarKeys {
+		_, _ = io.WriteString(h, key)
+		if info, err := f.sidecarFiles[key].Info(); err == nil {
 			_, _ = fmt.Fprintf(h, ":%d:%s", info.Size(), info.ModTime().UTC().String())
 		}
 	}

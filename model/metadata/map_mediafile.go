@@ -12,6 +12,7 @@ import (
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/utils/str"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 func (md Metadata) ToMediaFile(libID int, folderID string) model.MediaFile {
@@ -41,7 +42,7 @@ func (md Metadata) ToMediaFile(libID int, folderID string) model.MediaFile {
 			mf.BPM = new(v)
 		}
 	}
-	mf.Lyrics = md.mapLyrics()
+	mf.Lyrics = cmp.Or(md.lyricsJSON, md.mapLyrics())
 	mf.ExplicitStatus = md.mapExplicitStatusTag()
 
 	// Dates
@@ -74,6 +75,9 @@ func (md Metadata) ToMediaFile(libID int, folderID string) model.MediaFile {
 	mf.Channels = md.AudioProperties().Channels
 	mf.Codec = md.AudioProperties().Codec
 	mf.Path = md.FilePath()
+	mf.IsStrm = strm.IsFile(mf.Path)
+	mf.StrmTarget = md.strmTarget
+	mf.OriginalPath = mf.StrmPath()
 	mf.Suffix = md.Suffix()
 	mf.Size = md.Size()
 	mf.BirthTime = md.BirthTime()
@@ -163,6 +167,13 @@ func (md Metadata) mapLyrics() string {
 		return ""
 	}
 	return string(res)
+}
+
+// LyricsJSONFromTags normalizes embedded lyric tags into the MediaFile JSON
+// representation used by sidecars, without requiring a synthetic file stat.
+func LyricsJSONFromTags(filePath string, tags model.RawTags) string {
+	md := Metadata{filePath: filePath, tags: clean(filePath, tags)}
+	return md.mapLyrics()
 }
 
 func (md Metadata) mapExplicitStatusTag() string {

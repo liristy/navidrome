@@ -13,6 +13,7 @@ import (
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/utils/gg"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 const fallbackBitrate = 256 // kbps
@@ -44,7 +45,7 @@ func (s *deciderService) MakeDecision(ctx context.Context, mf *model.MediaFile, 
 	}
 
 	var probe *ffmpeg.AudioProbeResult
-	if !opts.SkipProbe {
+	if !opts.SkipProbe && !strm.IsFile(mf.Path) {
 		if !s.ff.IsProbeAvailable() {
 			log.Debug(ctx, "ffprobe not available, using tag metadata for transcode decision", "mediaID", mf.ID)
 		} else {

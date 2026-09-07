@@ -1,3 +1,4 @@
+ARG NODE_IMAGE=node:lts-alpine
 FROM --platform=$BUILDPLATFORM ghcr.io/crazy-max/osxcross:14.5-debian AS osxcross
 
 ########################################################################################################################
@@ -26,13 +27,14 @@ COPY --from=xx-build /out/ /usr/bin/
 
 ########################################################################################################################
 ### Build Navidrome UI
-FROM --platform=$BUILDPLATFORM node:lts-alpine AS ui
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS ui
 WORKDIR /app
 
 # Install node dependencies
 COPY ui/package.json ui/package-lock.json ./
 COPY ui/bin/ ./bin/
-RUN npm ci
+ARG NPM_AUDIT=true
+RUN npm ci --audit=${NPM_AUDIT}
 
 # Build bundle
 COPY ui/ ./
@@ -176,6 +178,22 @@ RUN <<EOT
         xx-verify /out/$so
     done
 EOT
+
+########################################################################################################################
+### Optional STRM regression checks (run by release/build-strm-image.sh)
+FROM ui AS strm-ui-tests
+RUN npm test -- src/dialogs/AboutDialog.test.jsx src/transcode/decisionService.test.js
+
+FROM build-alpine AS strm-tests
+RUN apk add --no-cache ffmpeg sqlite su-exec
+COPY . /workspace
+COPY --from=strm-ui-tests /build /workspace/ui/build
+RUN chmod -R a+rwX /workspace
+RUN --mount=type=cache,target=/tmp/strm-go-cache,uid=65534,gid=65534 \
+    --mount=type=cache,target=/go/pkg/mod \
+    su-exec nobody env GOCACHE=/tmp/strm-go-cache CGO_ENABLED=1 go test -tags=netgo,sqlite_fts5 \
+    ./utils/strm ./utils/sidecar ./conf ./model/... ./core/storage/... \
+    ./core/stream ./core/ffmpeg ./core/artwork ./core ./scanner ./persistence ./db/... ./server/subsonic
 
 ########################################################################################################################
 ### Build Final Image

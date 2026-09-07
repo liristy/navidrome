@@ -121,6 +121,7 @@ type configOptions struct {
 	PID                             pidOptions          `json:",omitzero"`
 	Inspect                         inspectOptions      `json:",omitzero"`
 	Subsonic                        subsonicOptions     `json:",omitzero"`
+	STRM                            strmOptions         `json:",omitzero"`
 	Transcoding                     transcodingOptions  `json:",omitzero"`
 	LastFM                          lastfmOptions       `json:",omitzero"`
 	Deezer                          deezerOptions       `json:",omitzero"`
@@ -170,18 +171,45 @@ type scannerOptions struct {
 	ScanOnStartup         bool
 	Extractor             string
 	ArtistJoiner          string
-	ArtistSplitExceptions []string // Artist names never split by tag separators
-	GenreSeparators       string   // Deprecated: Use Tags.genre.Split instead
-	GroupAlbumReleases    bool     // Deprecated: Use PID.Album instead
-	FollowSymlinks        bool     // Whether to follow symlinks when scanning directories
-	IgnoreDotFolders      bool     // Whether to ignore folders whose name starts with a dot when scanning
-	PurgeMissing          string   // Values: "never", "always", "full"
+	ArtistSplitExceptions []string       // Artist names never split by tag separators
+	GenreSeparators       string         // Deprecated: Use Tags.genre.Split instead
+	GroupAlbumReleases    bool           // Deprecated: Use PID.Album instead
+	FollowSymlinks        bool           // Whether to follow symlinks when scanning directories
+	IgnoreDotFolders      bool           // Whether to ignore folders whose name starts with a dot when scanning
+	PurgeMissing          string         // Values: "never", "always", "full"
+	Sidecar               sidecarOptions `json:",omitzero"`
+}
+
+// sidecarOptions controls metadata files stored next to media pointers. Keeping
+// this below Scanner makes the feature easy to carry across upstream releases,
+// while deprecated mappings below accept the flat names used by older forks.
+type sidecarOptions struct {
+	Enabled           bool
+	Format            string
+	ReadOnly          bool
+	GenerateOnStartup bool
+	Trust             bool
+	DeleteOnPurge     bool
 }
 
 type transcodingOptions struct {
 	MaxConcurrent        int
 	MaxConcurrentPerUser int
 	EnableCancellation   bool
+}
+
+type strmOptions struct {
+	LocalRoots          []string            // Explicit media-only roots for absolute-path STRM pointers.
+	ForceReportRealPath bool                // Report allowlisted local STRM targets to every Subsonic client.
+	Metadata            strmMetadataOptions `json:",omitzero"`
+}
+
+// strmMetadataOptions controls optional reads of the pointer target while
+// scanning. It is disabled by default because opening a CloudDrive/FUSE target
+// may trigger network I/O; HTTP targets are never probed by this feature.
+type strmMetadataOptions struct {
+	ProbeLocalTargets bool
+	ProbeConcurrency  int
 }
 
 type subsonicOptions struct {
@@ -438,6 +466,11 @@ func Load(noConfigDump bool) {
 	durationNonNegativeOrDefault(&Server.DevAlbumInfoTimeToLive, consts.AlbumInfoTimeToLive)
 	durationNonNegativeOrDefault(&Server.DevInsightsInitialDelay, consts.InsightsInitialDelay)
 	durationNonNegativeOrDefault(&Server.DevPluginCompilationTimeout, consts.DefaultPluginCompilationTimeout)
+	Server.Scanner.Sidecar.Format = strings.ToLower(strings.TrimSpace(Server.Scanner.Sidecar.Format))
+	if Server.STRM.Metadata.ProbeConcurrency < 1 {
+		log.Warn("STRM.Metadata.ProbeConcurrency must be positive; using 1")
+		Server.STRM.Metadata.ProbeConcurrency = 1
+	}
 
 	// Log deprecated, removed and unknown options
 	for _, o := range deprecatedOptions {
@@ -451,6 +484,7 @@ func Load(noConfigDump bool) {
 		validateBackupSchedule,
 		validatePlaylistsPath,
 		validatePurgeMissingOption,
+		validateSidecarOptions,
 		validateByteSize("MaxImageUploadSize", Server.MaxImageUploadSize),
 		validateByteSize("MaxImageSize", Server.MaxImageSize),
 		validateURL("ExtAuth.LogoutURL", Server.ExtAuth.LogoutURL),
@@ -539,6 +573,13 @@ var deprecatedOptions = []struct{ name, replacement string }{
 	{"CoverJpegQuality", "CoverArtQuality"},
 	{"SimilarSongsMatchThreshold", "Matcher.FuzzyThreshold"},
 	{"EnableTranscodingCancellation", "Transcoding.EnableCancellation"},
+	{"Scanner.EnableSidecar", "Scanner.Sidecar.Enabled"},
+	{"Scanner.SidecarFormat", "Scanner.Sidecar.Format"},
+	{"Scanner.SidecarReadOnly", "Scanner.Sidecar.ReadOnly"},
+	{"Scanner.SidecarGenerateOnStartup", "Scanner.Sidecar.GenerateOnStartup"},
+	{"Scanner.SidecarTrust", "Scanner.Sidecar.Trust"},
+	{"Scanner.SidecarTrustMode", "Scanner.Sidecar.Trust"},
+	{"Scanner.SidecarDeleteOnPurge", "Scanner.Sidecar.DeleteOnPurge"},
 }
 
 var removedOptions = []string{"Spotify.ID", "Spotify.Secret"}
@@ -845,6 +886,13 @@ func validatePurgeMissingOption() error {
 	return nil
 }
 
+func validateSidecarOptions() error {
+	if Server.Scanner.Sidecar.Format != "nfo" {
+		return fmt.Errorf("invalid Scanner.Sidecar.Format value: %q. The only supported value is 'nfo'", Server.Scanner.Sidecar.Format)
+	}
+	return nil
+}
+
 func validateByteSize(name, value string) func() error {
 	return func() error {
 		size, err := humanize.ParseBytes(value)
@@ -1063,10 +1111,20 @@ func setViperDefaults() {
 	viper.SetDefault("scanner.followsymlinks", true)
 	viper.SetDefault("scanner.ignoredotfolders", true)
 	viper.SetDefault("scanner.purgemissing", consts.PurgeMissingNever)
+	viper.SetDefault("scanner.sidecar.enabled", false)
+	viper.SetDefault("scanner.sidecar.format", "nfo")
+	viper.SetDefault("scanner.sidecar.readonly", true)
+	viper.SetDefault("scanner.sidecar.generateonstartup", false)
+	viper.SetDefault("scanner.sidecar.trust", false)
+	viper.SetDefault("scanner.sidecar.deleteonpurge", false)
 	viper.SetDefault("subsonic.appendsubtitle", true)
 	viper.SetDefault("subsonic.appendalbumversion", true)
 	viper.SetDefault("subsonic.artistparticipations", false)
 	viper.SetDefault("subsonic.defaultreportrealpath", false)
+	viper.SetDefault("strm.localroots", []string{})
+	viper.SetDefault("strm.forcereportrealpath", false)
+	viper.SetDefault("strm.metadata.probelocaltargets", false)
+	viper.SetDefault("strm.metadata.probeconcurrency", 2)
 	viper.SetDefault("subsonic.enableaveragerating", true)
 	viper.SetDefault("subsonic.legacyclients", "DSub")
 	viper.SetDefault("subsonic.minimalclients", "SubMusic")

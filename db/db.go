@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,13 @@ var (
 var embedMigrations embed.FS
 
 const migrationsFolder = "migrations"
+
+// The old STRM image used by the Redia guide recorded a private migration at
+// this version, but was built one day before upstream added the backdated
+// playqueue migration. Its databases therefore have one legitimate hole that
+// current goose rejects by default.
+const legacySTRMMissingMigrationError = "error: found 1 missing migrations before current version 20251019000000:\n\t" +
+	"version 20250823142158: migrations/20250823142158_make_playqueue_position_int.sql"
 
 // sql.Register panics if called twice, so guard it: the singleton instance can be reset
 // (tests/benchmarks) and rebuilt, but the driver is process-global and registers only once.
@@ -104,7 +112,7 @@ func Init(ctx context.Context) func() {
 		log.Info(ctx, "Upgrading DB Schema to latest version")
 	}
 	goose.SetLogger(&logAdapter{ctx: ctx, silent: schemaEmpty})
-	err = goose.UpContext(ctx, db, migrationsFolder)
+	err = upMigrations(ctx, db)
 	if err != nil {
 		log.Fatal(ctx, "Failed to apply new migrations", err)
 	}
@@ -120,6 +128,20 @@ func Init(ctx context.Context) func() {
 	return func() {
 		Close(ctx)
 	}
+}
+
+func upMigrations(ctx context.Context, database *sql.DB) error {
+	err := goose.UpContext(ctx, database, migrationsFolder)
+	if err == nil || !isLegacySTRMMigrationGap(err) {
+		return err
+	}
+	log.Warn(ctx, "Detected legacy STRM database migration gap; applying the known missing upstream migration",
+		"version", 20250823142158)
+	return goose.UpContext(ctx, database, migrationsFolder, goose.WithAllowMissing())
+}
+
+func isLegacySTRMMigrationGap(err error) bool {
+	return err != nil && strings.TrimSpace(err.Error()) == legacySTRMMissingMigrationError
 }
 
 // ErrorCodes reports the SQLite result code and extended result code carried by err.

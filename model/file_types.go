@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 var excludeAudioType = []string{
@@ -14,8 +16,15 @@ var excludeAudioType = []string{
 }
 
 func IsAudioFile(filePath string) bool {
+	if strm.IsFile(filePath) {
+		return true
+	}
 	extension := filepath.Ext(filePath)
-	mimeType := mime.TypeByExtension(extension)
+	switch strings.ToLower(extension) {
+	case ".m3u", ".m3u8", ".pls":
+		return false
+	}
+	mimeType, _, _ := mime.ParseMediaType(mime.TypeByExtension(extension))
 	return !slices.Contains(excludeAudioType, mimeType) && strings.HasPrefix(mimeType, "audio/")
 }
 

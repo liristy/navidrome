@@ -20,6 +20,7 @@ import (
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/consts"
 	"github.com/navidrome/navidrome/log"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 // TranscodeOptions contains all parameters for a transcoding operation.
@@ -27,11 +28,12 @@ type TranscodeOptions struct {
 	Command    string // DB command template (used to detect custom vs default)
 	Format     string // Target format (mp3, opus, aac, flac)
 	FilePath   string
-	BitRate    int // kbps, 0 = codec default
-	SampleRate int // 0 = no constraint
-	Channels   int // 0 = no constraint
-	BitDepth   int // 0 = no constraint; valid values: 16, 24, 32
-	Offset     int // seconds
+	Remote     bool // HTTP(S) source resolved from a trusted local STRM file.
+	BitRate    int  // kbps, 0 = codec default
+	SampleRate int  // 0 = no constraint
+	Channels   int  // 0 = no constraint
+	BitDepth   int  // 0 = no constraint; valid values: 16, 24, 32
+	Offset     int  // seconds
 }
 
 // AudioProbeResult contains authoritative audio stream properties from ffprobe.
@@ -77,8 +79,14 @@ func (e *ffmpeg) Transcode(ctx context.Context, opts TranscodeOptions) (io.ReadC
 	if _, err := ffmpegCmd(); err != nil {
 		return nil, err
 	}
-	if err := fileExists(opts.FilePath); err != nil {
-		return nil, err
+	if opts.Remote {
+		if err := strm.ValidateURL(opts.FilePath); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := fileExists(opts.FilePath); err != nil {
+			return nil, err
+		}
 	}
 	var args []string
 	if isDefaultCommand(opts.Format, opts.Command) {
@@ -86,7 +94,21 @@ func (e *ffmpeg) Transcode(ctx context.Context, opts TranscodeOptions) (io.ReadC
 	} else {
 		args = buildTemplateArgs(opts)
 	}
+	if opts.Remote {
+		args = restrictRemoteInput(args)
+	}
 	return e.start(ctx, args)
+}
+
+// Restrict nested protocols (including redirects/playlists) so remote content
+// cannot make ffmpeg read local files or execute another protocol handler.
+func restrictRemoteInput(args []string) []string {
+	for i, arg := range args {
+		if arg == "-i" {
+			return slices.Insert(args, i, "-protocol_whitelist", "http,https,tcp,tls", "-rw_timeout", "15000000")
+		}
+	}
+	return args
 }
 
 func (e *ffmpeg) ConvertAnimatedImage(ctx context.Context, reader io.Reader, maxSize int, quality int) (io.ReadCloser, error) {
@@ -345,8 +367,15 @@ func (e *ffmpeg) Version() string {
 }
 
 func (e *ffmpeg) start(ctx context.Context, args []string, input ...io.Reader) (io.ReadCloser, error) {
-	log.Trace(ctx, "Executing ffmpeg command", "cmd", args)
 	j := &ffCmd{args: args}
+	logArgs := slices.Clone(args)
+	for i, arg := range logArgs {
+		if strings.Contains(arg, "http://") || strings.Contains(arg, "https://") {
+			logArgs[i] = "[STRM URL]"
+			j.remote = true
+		}
+	}
+	log.Trace(ctx, "Executing ffmpeg command", "cmd", logArgs)
 	if len(input) > 0 {
 		j.input = input[0]
 	}
@@ -366,6 +395,7 @@ type ffCmd struct {
 	cmd    *exec.Cmd
 	input  io.Reader // optional stdin source
 	stderr *bytes.Buffer
+	remote bool
 }
 
 func (j *ffCmd) start(ctx context.Context) error {
@@ -376,7 +406,7 @@ func (j *ffCmd) start(ctx context.Context) error {
 	}
 	j.stderr = &bytes.Buffer{}
 	stderrWriter := &limitedWriter{buf: j.stderr, limit: 4096}
-	if log.IsGreaterOrEqualTo(log.LevelTrace) {
+	if !j.remote && log.IsGreaterOrEqualTo(log.LevelTrace) {
 		cmd.Stderr = io.MultiWriter(os.Stderr, stderrWriter)
 	} else {
 		cmd.Stderr = stderrWriter
@@ -393,7 +423,7 @@ func (j *ffCmd) wait() {
 	if err := j.cmd.Wait(); err != nil {
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			errMsg := fmt.Sprintf("%s exited with non-zero status code: %d", j.args[0], exitErr.ExitCode())
-			if stderrOutput := strings.TrimSpace(j.stderr.String()); stderrOutput != "" {
+			if stderrOutput := strings.TrimSpace(j.stderr.String()); !j.remote && stderrOutput != "" {
 				errMsg += ": " + stderrOutput
 			}
 			_ = j.out.CloseWithError(errors.New(errMsg))

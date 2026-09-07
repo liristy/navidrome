@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"path"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -22,7 +24,9 @@ import (
 	"github.com/navidrome/navidrome/model/metadata"
 	"github.com/navidrome/navidrome/utils"
 	"github.com/navidrome/navidrome/utils/pl"
+	"github.com/navidrome/navidrome/utils/sidecar"
 	"github.com/navidrome/navidrome/utils/slice"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 func createPhaseFolders(ctx context.Context, state *scanState, ds model.DataStore) *phaseFolders {
@@ -168,7 +172,8 @@ func (p *phaseFolders) producer() ppl.Producer[*folderEntry] {
 					"numPlaylists", len(folder.playlistFiles), "numSubfolders", folder.numSubFolders)
 
 				// Check if folder is outdated
-				if folder.isOutdated() {
+				needsSidecar := needsMissingSidecarGeneration(folder)
+				if folder.isOutdated() || needsSidecar {
 					if !p.state.fullScan {
 						// Ancestor folders need a row even with no files of their own: artwork
 						// resolution climbs them, and an image added later needs a state to diff.
@@ -176,7 +181,8 @@ func (p *phaseFolders) producer() ppl.Producer[*folderEntry] {
 							log.Trace(p.ctx, "Scanner: Skipping new empty folder", "folder", folder.path, "lib", job.lib.Name)
 							continue
 						}
-						log.Debug(p.ctx, "Scanner: Detected changes in folder", "folder", folder.path, "lastUpdate", folder.modTime, "lib", job.lib.Name)
+						log.Debug(p.ctx, "Scanner: Folder requires processing", "folder", folder.path, "lastUpdate", folder.modTime,
+							"missingSidecar", needsSidecar, "lib", job.lib.Name)
 					}
 					totalChanged++
 					folder.elapsed.Stop()
@@ -190,6 +196,33 @@ func (p *phaseFolders) producer() ppl.Producer[*folderEntry] {
 		log.Debug(p.ctx, "Scanner: Finished loading all folders", "numFolders", total, "numChanged", totalChanged)
 		return nil
 	}, ppl.Name("traverse filesystem"))
+}
+
+func needsMissingSidecarGeneration(folder *folderEntry) bool {
+	options := conf.Server.Scanner.Sidecar
+	if !options.Enabled || !options.GenerateOnStartup || options.Format != "nfo" {
+		return false
+	}
+	available := make(map[string]struct{}, len(folder.sidecarFiles))
+	for name := range folder.sidecarFiles {
+		available[strings.ToLower(name)] = struct{}{}
+	}
+	for name := range folder.audioFiles {
+		if !strm.IsFile(name) {
+			continue
+		}
+		found := false
+		for _, candidate := range sidecar.NFOCandidates(name) {
+			if _, ok := available[strings.ToLower(path.Base(candidate))]; ok {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *phaseFolders) measure(entry *folderEntry) func() time.Duration {
@@ -233,6 +266,11 @@ func (p *phaseFolders) processFolder(entry *folderEntry) (*folderEntry, error) {
 		fullPath := path.Join(entry.path, afPath)
 		dbTrack, foundInDB := dbTracks[fullPath]
 		if !foundInDB || p.state.fullScan {
+			filesToImport[fullPath] = dbTrack
+		} else if conf.Server.Scanner.Sidecar.Enabled && strm.IsFile(fullPath) {
+			// This folder was selected because its hash changed. Re-import
+			// pointers so NFO additions, edits and removals take effect even
+			// when the STRM timestamp itself was preserved.
 			filesToImport[fullPath] = dbTrack
 		} else {
 			info, err := af.Info()
@@ -281,6 +319,13 @@ func (p *phaseFolders) loadTagsFromFiles(entry *folderEntry, toImport map[string
 			return err
 		}
 		for filePath, info := range allInfo {
+			info, generated := applyTrackSidecar(p.ctx, entry.job.fs, filePath, info)
+			if generated != "" {
+				if generatedInfo, statErr := fs.Stat(entry.job.fs, generated); statErr == nil {
+					entry.sidecarFiles[path.Base(generated)] = fs.FileInfoToDirEntry(generatedInfo)
+					entry.modTime = utils.TimeNewest(entry.modTime, generatedInfo.ModTime())
+				}
+			}
 			md := metadata.New(filePath, info)
 			track := md.ToMediaFile(entry.job.lib.ID, entry.id)
 			tracks = append(tracks, track)

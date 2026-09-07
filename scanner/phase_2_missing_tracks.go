@@ -7,11 +7,14 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/Masterminds/squirrel"
 	ppl "github.com/google/go-pipeline/pkg/pipeline"
 	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/consts"
+	"github.com/navidrome/navidrome/core/storage"
 	"github.com/navidrome/navidrome/log"
 	"github.com/navidrome/navidrome/model"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 type missingTracks struct {
@@ -355,6 +358,10 @@ func (p *phaseMissingTracks) finalize(err error) error {
 }
 
 func (p *phaseMissingTracks) purgeMissing() error {
+	cleanup, err := p.collectManagedSidecarsForPurge()
+	if err != nil {
+		return err
+	}
 	deletedCount, err := p.ds.MediaFile(p.ctx).DeleteAllMissing()
 	if err != nil {
 		return fmt.Errorf("error deleting missing files: %w", err)
@@ -367,8 +374,70 @@ func (p *phaseMissingTracks) purgeMissing() error {
 	} else {
 		log.Debug(p.ctx, "Scanner: No missing items to purge")
 	}
+	p.deleteManagedSidecars(cleanup)
 
 	return nil
+}
+
+type managedSidecarCleanup struct {
+	library model.Library
+	paths   []string
+}
+
+func (p *phaseMissingTracks) collectManagedSidecarsForPurge() ([]managedSidecarCleanup, error) {
+	options := conf.Server.Scanner.Sidecar
+	if !options.Enabled || !options.DeleteOnPurge {
+		return nil, nil
+	}
+	result := make([]managedSidecarCleanup, 0, len(p.state.libraries))
+	for _, library := range p.state.libraries {
+		files, err := p.ds.MediaFile(p.ctx).GetAll(model.QueryOptions{Filters: squirrel.And{
+			squirrel.Eq{"library_id": library.ID}, squirrel.Eq{"missing": true},
+		}})
+		if err != nil {
+			return nil, fmt.Errorf("load missing STRM sidecars for library %s: %w", library.Name, err)
+		}
+		item := managedSidecarCleanup{library: library}
+		for _, file := range files {
+			if file.Missing && file.LibraryID == library.ID && strm.IsFile(file.Path) {
+				item.paths = append(item.paths, file.Path)
+			}
+		}
+		if len(item.paths) > 0 {
+			result = append(result, item)
+		}
+	}
+	return result, nil
+}
+
+func (p *phaseMissingTracks) deleteManagedSidecars(items []managedSidecarCleanup) {
+	for _, item := range items {
+		store, err := storage.For(item.library.Path)
+		if err != nil {
+			log.Warn(p.ctx, "Scanner: Could not open storage for managed NFO cleanup", "lib", item.library.Name, err)
+			continue
+		}
+		fsys, err := store.FS()
+		if err != nil {
+			log.Warn(p.ctx, "Scanner: Could not open music FS for managed NFO cleanup", "lib", item.library.Name, err)
+			continue
+		}
+		deleter, ok := fsys.(nfoDeleter)
+		if !ok {
+			log.Warn(p.ctx, "Scanner: Music storage does not support managed NFO cleanup", "lib", item.library.Name)
+			continue
+		}
+		for _, mediaPath := range item.paths {
+			name, deleted, deleteErr := deleter.DeleteManagedNFO(mediaPath)
+			if deleteErr != nil {
+				log.Warn(p.ctx, "Scanner: Could not remove managed NFO after database purge", "file", mediaPath, deleteErr)
+				continue
+			}
+			if deleted {
+				log.Info(p.ctx, "Scanner: Removed managed NFO after database purge", "sidecar", name)
+			}
+		}
+	}
 }
 
 var _ phase[*missingTracks] = (*phaseMissingTracks)(nil)

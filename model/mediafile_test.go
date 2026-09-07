@@ -1,6 +1,7 @@
 package model_test
 
 import (
+	"path/filepath"
 	"time"
 
 	"github.com/navidrome/navidrome/conf"
@@ -724,6 +725,15 @@ var _ = Describe("MediaFile.Hash", func() {
 		base := MediaFile{Title: "Song"}
 		Expect(base.Equals(MediaFile{Title: "Song", BPM: new(120)})).To(BeFalse())
 		Expect(base.Equals(MediaFile{Title: "Song", BitDepth: new(24)})).To(BeFalse())
+	})
+})
+
+var _ = Describe("MediaFile.StrmPath", func() {
+	It("uses the compatible stored target only for STRM items", func() {
+		mf := MediaFile{LibraryPath: "/music", Path: "track.strm", IsStrm: true, StrmTarget: "/cloud/track.flac"}
+		Expect(mf.StrmPath()).To(Equal("/cloud/track.flac"))
+		mf.IsStrm = false
+		Expect(mf.StrmPath()).To(Equal(filepath.Join("/music", "track.strm")))
 	})
 })
 

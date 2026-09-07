@@ -98,6 +98,12 @@ type MediaFile struct {
 	Tags         Tags         `structs:"tags" json:"tags,omitempty" hash:"ignore"`       // All imported tags from the original file
 	Participants Participants `structs:"participants" json:"participants" hash:"ignore"` // All artists that participated in this track
 
+	// IsStrm and StrmTarget intentionally match the native API contract used by
+	// the older STRM fork and Redia. OriginalPath is derived after database reads.
+	IsStrm       bool   `structs:"is_strm" json:"isStrm" hash:"ignore"`
+	StrmTarget   string `structs:"strm_target" json:"strmTarget" hash:"ignore"`
+	OriginalPath string `structs:"-" json:"originalPath" hash:"ignore"`
+
 	Missing   bool      `structs:"missing" json:"missing" hash:"ignore"`      // If the file is not found in the library's FS
 	BirthTime time.Time `structs:"birth_time" json:"birthTime" hash:"ignore"` // Time of file creation (ctime)
 	CreatedAt time.Time `structs:"created_at" json:"createdAt" hash:"ignore"` // Time this entry was created in the DB
@@ -252,6 +258,16 @@ func (mf MediaFile) IsEquivalent(other MediaFile) bool {
 
 func (mf MediaFile) AbsolutePath() string {
 	return filepath.Join(mf.LibraryPath, mf.Path)
+}
+
+// StrmPath returns the stored pointer target when this is a STRM item. The
+// target is populated only for allowlisted local paths; all other items retain
+// the normal library path.
+func (mf MediaFile) StrmPath() string {
+	if mf.IsStrm && mf.StrmTarget != "" {
+		return mf.StrmTarget
+	}
+	return mf.AbsolutePath()
 }
 
 // AudioCodec returns the audio codec for this file.

@@ -22,6 +22,7 @@ import (
 	"github.com/navidrome/navidrome/utils/number"
 	"github.com/navidrome/navidrome/utils/req"
 	"github.com/navidrome/navidrome/utils/slice"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 func newResponse() *responses.Subsonic {
@@ -224,8 +225,23 @@ func childFromMediaFile(ctx context.Context, mf model.MediaFile) responses.Child
 	child.CoverArt = coverArtOrEmpty(mf.CoverArtID(), mf.ImageAbsent)
 	child.ContentType = mf.ContentType()
 
-	if ok && player.ReportRealPath {
+	reportRealPath := ok && player.ReportRealPath
+	if strm.IsFile(mf.Path) && conf.Server.STRM.ForceReportRealPath {
+		// Redia-like reverse proxies need the target independently of the
+		// calling player's persisted preference. This is an explicit admin
+		// opt-in and only allowlisted local targets are revealed below.
+		reportRealPath = true
+	}
+	if reportRealPath {
 		child.Path = mf.AbsolutePath()
+		// Reverse proxies can map a mounted cloud path to a provider's direct
+		// link. Keep the database path as the pointer so scans/deletions still work.
+		// Never expose signed HTTP URLs or local targets outside the allowlist.
+		if strm.IsFile(mf.Path) {
+			if entry, err := strm.ReadFile(mf.AbsolutePath()); err == nil && entry.Path != "" && strm.AllowedLocalPath(entry.Path, conf.Server.STRM.LocalRoots) {
+				child.Path = entry.Path
+			}
+		}
 	} else {
 		child.Path = fakePath(mf)
 	}

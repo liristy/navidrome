@@ -19,6 +19,7 @@ import (
 	"github.com/navidrome/navidrome/model/criteria"
 	"github.com/navidrome/navidrome/utils/slice"
 	"github.com/navidrome/navidrome/utils/str"
+	"github.com/navidrome/navidrome/utils/strm"
 	"github.com/pocketbase/dbx"
 )
 
@@ -55,6 +56,13 @@ func (m *dbMediaFile) PostScan() error {
 		}
 		m.Genre, m.Genres = m.MediaFile.Tags.ToGenres()
 	}
+	// Match the native API shape consumed by Redia. Legacy STRM databases
+	// already contain these columns; new databases receive them via migration.
+	// Never return an old or manually injected target outside the active roots.
+	if m.IsStrm && !strm.AllowedLocalPath(m.StrmTarget, conf.Server.STRM.LocalRoots) {
+		m.StrmTarget = ""
+	}
+	m.OriginalPath = m.StrmPath()
 	return nil
 }
 

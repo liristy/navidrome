@@ -17,6 +17,7 @@ import (
 	"github.com/navidrome/navidrome/persistence"
 	"github.com/navidrome/navidrome/utils/slice"
 	"github.com/navidrome/navidrome/utils/str"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 type Archiver interface {
@@ -98,7 +99,10 @@ func createZipWriter(out io.Writer, format string, bitrate int) *zip.Writer {
 
 func (a *archiver) albumFilename(mf model.MediaFile, format string, isMultiDisc bool) string {
 	_, file := filepath.Split(mf.Path)
-	if format != "raw" {
+	if strm.IsFile(mf.Path) {
+		file = strings.TrimSuffix(file, filepath.Ext(file)) + "." + mf.Suffix
+	}
+	if format != "raw" && format != "" {
 		file = strings.TrimSuffix(file, mf.Suffix) + format
 	}
 	if isMultiDisc {
@@ -187,7 +191,7 @@ func (a *archiver) addFileToZip(ctx context.Context, z *zip.Writer, mf model.Med
 	// archive.
 	var r io.ReadCloser
 	var err error
-	if format != "raw" && format != "" {
+	if (format != "raw" && format != "") || strm.IsFile(path) {
 		r, err = a.ms.NewStream(ctx, &mf, stream.Request{Format: format, BitRate: bitrate})
 	} else {
 		r, err = os.Open(path)

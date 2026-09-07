@@ -98,7 +98,9 @@ var _ = Describe("MediaRepository", func() {
 		actual, err := mr.Get("1004")
 		Expect(err).ToNot(HaveOccurred())
 		actual.CreatedAt = time.Time{}
-		Expect(actual).To(Equal(&songAntenna))
+		expected := songAntenna
+		expected.OriginalPath = expected.StrmPath()
+		Expect(actual).To(Equal(&expected))
 	})
 
 	It("returns ErrNotFound", func() {

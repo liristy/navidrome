@@ -54,4 +54,17 @@ describe('<LinkToVersion />', () => {
     const cell = screen.queryByRole('cell')
     expect(cell.textContent).toBe('0.40.0-SNAPSHOT (300a0292)')
   })
+
+  it.each(['0.63.2-liristy (afb3a2f8)', '0.63.2-liristy'])(
+    'links custom version %s to the upstream release',
+    (version) => {
+      render(<Wrapper version={version} />)
+      const link = screen.getByRole('link')
+      expect(link.href).toBe(
+        'https://github.com/navidrome/navidrome/releases/tag/v0.63.2',
+      )
+      expect(link.textContent).toBe('0.63.2-liristy')
+      expect(screen.getByRole('cell').textContent).toBe(version)
+    },
+  )
 })

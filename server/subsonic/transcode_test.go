@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 
+	"github.com/navidrome/navidrome/conf"
 	"github.com/navidrome/navidrome/core/ffmpeg"
 	"github.com/navidrome/navidrome/core/stream"
 	"github.com/navidrome/navidrome/model"
@@ -29,6 +31,7 @@ var _ = Describe("Transcode endpoints", func() {
 	)
 
 	BeforeEach(func() {
+		DeferCleanup(conf.SnapshotConfig())
 		mockMFRepo = &tests.MockMediaFileRepo{}
 		ds = &tests.MockDataStore{MockedMediaFile: mockMFRepo}
 		mockTD = &mockTranscodeDecision{}
@@ -224,6 +227,22 @@ var _ = Describe("Transcode endpoints", func() {
 			Expect(resp.TranscodeDecision.SourceStream.Protocol).To(Equal("http"))
 			Expect(resp.TranscodeDecision.SourceStream.Container).To(Equal("mp3"))
 			Expect(resp.TranscodeDecision.SourceStream.AudioBitrate).To(Equal(int32(320_000)))
+		})
+
+		It("preserves valid transcode params for STRM clients", func() {
+			mockMFRepo.SetData(model.MediaFiles{{
+				ID: "strm-1", Path: "song.strm", IsStrm: true, StrmTarget: "/CloudNAS/CloudDrive/115/song.flac",
+				Suffix: "flac", Codec: "FLAC", BitRate: 900, Channels: 2, SampleRate: 44100,
+			}})
+			mockTD.decision = &stream.TranscodeDecision{MediaID: "strm-1", CanDirectPlay: true}
+			mockTD.token = "strm-playback-token"
+
+			r := newJSONPostRequest("mediaId=strm-1&mediaType=song", `{}`)
+			resp, err := router.GetTranscodeDecision(w, r)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resp.TranscodeDecision.CanDirectPlay).To(BeTrue())
+			Expect(resp.TranscodeDecision.TranscodeParams).To(Equal("strm-playback-token"))
 		})
 
 		It("filters AAC from transcoding profiles", func() {
@@ -435,6 +454,64 @@ var _ = Describe("Transcode endpoints", func() {
 			Expect(resp).To(BeNil())
 			Expect(w.Code).To(Equal(http.StatusBadRequest))
 		})
+
+		It("redirects cached STRM transcode URLs through the Redia-intercepted stream endpoint", func() {
+			conf.Server.STRM.ForceReportRealPath = true
+			conf.Server.STRM.LocalRoots = []string{"/cloud/music"}
+			mockMFRepo.SetData(model.MediaFiles{{ID: "strm-1", Path: "song.strm", IsStrm: true, StrmTarget: "/cloud/music/song.flac"}})
+			r := newGetRequest("mediaId=strm-1", "mediaType=song", "transcodeParams=old-token", "offset=10", "u=test")
+			r.URL.Path = "/getTranscodeStream-prefix/rest/getTranscodeStream.view"
+
+			resp, err := router.GetTranscodeStream(w, r)
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resp).To(BeNil())
+			Expect(w.Code).To(Equal(http.StatusTemporaryRedirect))
+			location := w.Header().Get("Location")
+			Expect(location).To(HavePrefix("/getTranscodeStream-prefix/rest/stream?"))
+			redirect, parseErr := url.Parse(location)
+			Expect(parseErr).ToNot(HaveOccurred())
+			Expect(r.URL.ResolveReference(redirect).Path).To(Equal("/getTranscodeStream-prefix/rest/stream"))
+			Expect(location).To(ContainSubstring("format=raw"))
+			Expect(location).To(ContainSubstring("id=strm-1"))
+			Expect(location).To(ContainSubstring("timeOffset=10"))
+			Expect(location).To(ContainSubstring("u=test"))
+			Expect(location).ToNot(ContainSubstring("transcodeParams"))
+			Expect(location).ToNot(ContainSubstring("mediaId"))
+		})
+
+		It("rejects invalid STRM tokens before the redirect", func() {
+			conf.Server.STRM.ForceReportRealPath = true
+			conf.Server.STRM.LocalRoots = []string{"/cloud/music"}
+			mockMFRepo.SetData(model.MediaFiles{{ID: "strm-1", IsStrm: true, StrmTarget: "/cloud/music/song.flac"}})
+			mockTD.resolveErr = stream.ErrTokenInvalid
+			_, err := router.GetTranscodeStream(w, newGetRequest("mediaId=strm-1", "mediaType=song", "transcodeParams=bad"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(w.Code).To(Equal(http.StatusGone))
+			Expect(w.Header().Get("Location")).To(BeEmpty())
+		})
+
+		DescribeTable("retains native streaming outside Redia direct-play scope",
+			func(enabled bool, target, format, method string) {
+				conf.Server.STRM.ForceReportRealPath = enabled
+				conf.Server.STRM.LocalRoots = []string{"/cloud/music"}
+				mockMFRepo.SetData(model.MediaFiles{{ID: "strm-1", IsStrm: true, StrmTarget: target}})
+				fakeStreamer := &fakeMediaStreamer{}
+				router = New(ds, nil, fakeStreamer, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, mockTD, nil)
+				mockTD.resolvedReq = stream.Request{Format: format, BitRate: 128, SampleRate: 44100, Channels: 2}
+				r := newGetRequest("mediaId=strm-1", "mediaType=song", "transcodeParams=valid-token")
+				r.Method = method
+				_, _ = router.GetTranscodeStream(w, r)
+				Expect(w.Header().Get("Location")).To(BeEmpty())
+				Expect(fakeStreamer.captured).ToNot(BeNil())
+				Expect(*fakeStreamer.captured).To(Equal(mockTD.resolvedReq))
+			},
+			Entry("disabled compatibility", false, "/cloud/music/song.flac", "raw", http.MethodGet),
+			Entry("HTTP pointer", true, "", "raw", http.MethodGet),
+			Entry("outside allowlist", true, "/private/song.flac", "raw", http.MethodGet),
+			Entry("negotiated transcode", true, "/cloud/music/song.flac", "mp3", http.MethodGet),
+			Entry("POST authentication", true, "/cloud/music/song.flac", "raw", http.MethodPost),
+		)
 
 		It("returns 410 for invalid or mismatched token", func() {
 			mockMFRepo.SetData(model.MediaFiles{{ID: "123"}})

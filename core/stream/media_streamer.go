@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"github.com/navidrome/navidrome/model/request"
 	"github.com/navidrome/navidrome/utils/cache"
 	"github.com/navidrome/navidrome/utils/req"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 type MediaStreamer interface {
@@ -48,6 +50,8 @@ type streamJob struct {
 	ms         *mediaStreamer
 	mf         *model.MediaFile
 	filePath   string
+	remote     bool
+	pointer    bool
 	format     string
 	bitRate    int
 	sampleRate int
@@ -57,7 +61,13 @@ type streamJob struct {
 }
 
 func (j *streamJob) Key() string {
-	return fmt.Sprintf("%s.%s.%d.%d.%d.%d.%s.%d", j.mf.ID, j.mf.UpdatedAt.Format(time.RFC3339Nano), j.bitRate, j.sampleRate, j.bitDepth, j.channels, j.format, j.offset)
+	key := fmt.Sprintf("%s.%s.%d.%d.%d.%d.%s.%d", j.mf.ID, j.mf.UpdatedAt.Format(time.RFC3339Nano), j.bitRate, j.sampleRate, j.bitDepth, j.channels, j.format, j.offset)
+	if j.remote || j.pointer {
+		// A link can be refreshed before the next scan. Never reuse the previous
+		// target's bytes, or put the signed URL itself into cache keys/logs.
+		key += fmt.Sprintf(".%x", sha256.Sum256([]byte(j.filePath)))
+	}
+	return key
 }
 
 // NewStream creates a Stream for the given MediaFile and Request. It handles both raw streaming (no transcoding)
@@ -82,6 +92,30 @@ func (ms *mediaStreamer) NewStream(ctx context.Context, mf *model.MediaFile, req
 	}
 	s := &Stream{ctx: ctx, mf: mf, format: format, bitRate: bitRate}
 	filePath := mf.AbsolutePath()
+	pointer := strm.IsFile(filePath)
+	remote := false
+	if pointer {
+		entry, err := strm.ReadFile(filePath)
+		if err != nil {
+			return nil, err
+		}
+		filePath = entry.Target()
+		remote = entry.URL != ""
+		if !remote {
+			filePath, err = strm.ResolveLocalPath(entry.Path, conf.Server.STRM.LocalRoots)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if format == "raw" {
+			s.format = entry.Suffix
+		}
+		if format == "raw" && remote {
+			s.remote = &remoteStream{ctx: ctx, url: entry.URL}
+			s.ReadCloser = s.remote
+			return s, nil
+		}
+	}
 
 	if format == "raw" {
 		log.Debug(ctx, "Streaming RAW file", "id", mf.ID, "path", filePath,
@@ -94,7 +128,9 @@ func (ms *mediaStreamer) NewStream(ctx context.Context, mf *model.MediaFile, req
 		}
 		s.ReadCloser = f
 		s.Seeker = f
-		s.format = mf.Suffix
+		if !pointer {
+			s.format = mf.Suffix
+		}
 		return s, nil
 	}
 
@@ -102,6 +138,8 @@ func (ms *mediaStreamer) NewStream(ctx context.Context, mf *model.MediaFile, req
 		ms:         ms,
 		mf:         mf,
 		filePath:   filePath,
+		remote:     remote,
+		pointer:    pointer,
 		format:     format,
 		bitRate:    bitRate,
 		sampleRate: req.SampleRate,
@@ -124,7 +162,7 @@ func (ms *mediaStreamer) NewStream(ctx context.Context, mf *model.MediaFile, req
 	s.ReadCloser = r
 	s.Seeker = r.Seeker
 
-	log.Debug(ctx, "Streaming TRANSCODED file", "id", mf.ID, "path", filePath,
+	log.Debug(ctx, "Streaming TRANSCODED file", "id", mf.ID, "path", mf.AbsolutePath(),
 		"requestBitrate", req.BitRate, "requestFormat", req.Format, "requestOffset", req.Offset,
 		"originalBitrate", mf.BitRate, "originalFormat", mf.Suffix,
 		"selectedBitrate", bitRate, "selectedFormat", format, "cached", cached, "seekable", s.Seekable())
@@ -133,6 +171,7 @@ func (ms *mediaStreamer) NewStream(ctx context.Context, mf *model.MediaFile, req
 }
 
 type Stream struct {
+	remote  *remoteStream
 	ctx     context.Context
 	mf      *model.MediaFile
 	bitRate int
@@ -157,6 +196,9 @@ func (s *Stream) EstimatedContentLength() int {
 // Once bytes are on the wire it panics with http.ErrAbortHandler instead, aborting the response.
 // Empty output (0 bytes, no error) is logged but not treated as an error.
 func (s *Stream) Serve(ctx context.Context, w http.ResponseWriter, r *http.Request) (int64, error) {
+	if s.remote != nil {
+		return s.remote.serve(w, r, s.ContentType())
+	}
 	if s.Seekable() {
 		http.ServeContent(w, r, s.Name(), s.ModTime(), s)
 		return -1, nil
@@ -166,9 +208,11 @@ func (s *Stream) Serve(ctx context.Context, w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", s.ContentType())
 
 	if req.Params(r).BoolOr("estimateContentLength", false) {
-		length := strconv.Itoa(s.EstimatedContentLength())
-		log.Trace(ctx, "Estimated content-length", "contentLength", length)
-		w.Header().Set("Content-Length", length)
+		if estimated := s.EstimatedContentLength(); estimated > 0 {
+			length := strconv.Itoa(estimated)
+			log.Trace(ctx, "Estimated content-length", "contentLength", length)
+			w.Header().Set("Content-Length", length)
+		}
 	}
 
 	if r.Method == http.MethodHead {
@@ -263,6 +307,7 @@ func NewTranscodingCache() TranscodingCache {
 				Command:    command,
 				Format:     job.format,
 				FilePath:   job.filePath,
+				Remote:     job.remote,
 				BitRate:    job.bitRate,
 				SampleRate: job.sampleRate,
 				BitDepth:   job.bitDepth,

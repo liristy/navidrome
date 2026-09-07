@@ -85,19 +85,20 @@ const LinkToVersion = ({ version }) => {
   }
 
   const parts = version.split(' ')
-  const commitID = parts[1].replace(/[()]/g, '')
+  const commitID = parts[1]?.replace(/[()]/g, '')
+  const upstreamVersion = parts[0].replace(/-liristy$/, '')
   const isSnapshot = version.includes('SNAPSHOT')
   const url = isSnapshot
     ? `https://github.com/navidrome/navidrome/compare/v${
         parts[0].split('-')[0]
       }...${commitID}`
-    : `https://github.com/navidrome/navidrome/releases/tag/v${parts[0]}`
+    : `https://github.com/navidrome/navidrome/releases/tag/v${upstreamVersion}`
   return (
     <>
       <Link href={url} target="_blank" rel="noopener noreferrer">
         {parts[0]}
       </Link>
-      {' (' + commitID + ')'}
+      {commitID && ' (' + commitID + ')'}
     </>
   )
 }

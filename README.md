@@ -45,6 +45,7 @@ A share of the revenue helps fund the development of Navidrome at no additional 
  
  - Handles very **large music collections**
  - Streams virtually **any audio format** available
+ - Supports **[STRM pointers](docs/strm.md)** to HTTP/HTTPS audio or allowlisted mounted files (this fork)
  - Reads and uses all your beautifully curated **metadata**
  - Great support for **compilations** (Various Artists albums) and **box sets** (multi-disc albums)
  - **Multi-user**, each user has their own play counts, playlists, favourites, etc...
