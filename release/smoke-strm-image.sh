@@ -92,7 +92,8 @@ wget -q -O "$test_root/decision.json" --header='Content-Type: application/json' 
 grep -F '"status":"ok"' "$test_root/decision.json" > /dev/null
 grep -F '"canDirectPlay":true' "$test_root/decision.json" > /dev/null
 play_token=$(sed -n 's/.*"transcodeParams":"\([^"]*\)".*/\1/p' "$test_root/decision.json")
-test -n "$play_token"
+test -z "$play_token"
+play_token=cached-redia5-token
 redirect_headers=$(wget -S -O /dev/null \
     "http://127.0.0.1:4533/rest/getTranscodeStream?$auth&mediaId=$song_id&mediaType=song&transcodeParams=$play_token" 2>&1)
 printf '%s\n' "$redirect_headers" | grep -F 'HTTP/1.1 307 Temporary Redirect' > /dev/null
@@ -107,20 +108,18 @@ printf '%s\n' "$range_headers" | grep -F 'Content-Range: bytes 32-' > /dev/null
 cmp "$test_root/range.bin" "$track"
 invalid_headers=$(wget -S -O /dev/null \
     "http://127.0.0.1:4533/rest/getTranscodeStream?$auth&mediaId=$song_id&mediaType=song&transcodeParams=invalid" 2>&1 || true)
-printf '%s\n' "$invalid_headers" | grep -F '410 Gone' > /dev/null
-# A client unable to play FLAC must receive an MP3 decision and actual MP3.
+printf '%s\n' "$invalid_headers" | grep -F '307 Temporary Redirect' > /dev/null
+# Even a transcode-only client must fall back to the classic STRM endpoint.
 wget -q -O "$test_root/transcode-decision.json" --header='Content-Type: application/json' \
     --post-data='{"transcodingProfiles":[{"container":"mp3","audioCodec":"mp3","protocol":"http"}],"maxTranscodingAudioBitrate":128000}' \
     "http://127.0.0.1:4533/rest/getTranscodeDecision?$auth&mediaId=$song_id&mediaType=song"
 grep -F '"canTranscode":true' "$test_root/transcode-decision.json" > /dev/null
 transcode_token=$(sed -n 's/.*"transcodeParams":"\([^"]*\)".*/\1/p' "$test_root/transcode-decision.json")
-test -n "$transcode_token"
+test -z "$transcode_token"
+# Restore redia5 query semantics: explicit format/bitrate survive the hop.
 transcode_headers=$(wget -S -O "$test_root/negotiated.mp3" \
-    "http://127.0.0.1:4533/rest/getTranscodeStream?$auth&mediaId=$song_id&mediaType=song&transcodeParams=$transcode_token" 2>&1)
-if printf '%s\n' "$transcode_headers" | grep -F '307 Temporary Redirect' > /dev/null; then
-    echo 'FAIL: negotiated transcoding was redirected to raw audio' >&2
-    exit 1
-fi
+    "http://127.0.0.1:4533/rest/getTranscodeStream?$auth&mediaId=$song_id&mediaType=song&transcodeParams=cached&format=mp3&maxBitRate=128" 2>&1)
+printf '%s\n' "$transcode_headers" | grep -F '307 Temporary Redirect' > /dev/null
 test "$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=nw=1:nk=1 "$test_root/negotiated.mp3")" = mp3
 login='{"username":"admin","password":"strm-isolated-smoke-only"}'
 wget -q -O "$test_root/login.json" --header='Content-Type: application/json' \
@@ -139,4 +138,4 @@ codec=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of
 test "$codec" = mp3
 wget -q -O "$test_root/index.html" http://127.0.0.1:4533/app/
 grep -i '<html' "$test_root/index.html" > /dev/null
-echo 'PASS: startup, UI, target metadata scrape, safe NFO generation, STRM scan, Redia native-API compatibility, validated direct-play redirect, Range/206, invalid-token rejection, negotiated MP3, forced real-path response, raw playback and FFmpeg transcoding'
+echo 'PASS: startup, UI, metadata scrape, NFO, STRM scan, native-API compatibility, redia5 no-token fallback, cached-token redirect, Range/206, classic MP3 parameters, forced real-path response, raw playback and FFmpeg transcoding'

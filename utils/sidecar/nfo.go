@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,9 @@ type Metadata struct {
 	Track          string
 	Disc           string
 	Date           string
+	ReleaseDate    string
+	OriginalDate   string
+	AlbumVersion   string
 	Genres         []string
 	Comment        string
 	Duration       time.Duration
@@ -74,7 +78,7 @@ type Participant struct {
 
 func (m Metadata) Empty() bool {
 	return m.Title == "" && len(m.Artists) == 0 && m.Album == "" && len(m.AlbumArtists) == 0 &&
-		m.Track == "" && m.Disc == "" && m.Date == "" && len(m.Genres) == 0 && m.Comment == "" &&
+		m.Track == "" && m.Disc == "" && m.Date == "" && m.ReleaseDate == "" && m.OriginalDate == "" && m.AlbumVersion == "" && len(m.Genres) == 0 && m.Comment == "" &&
 		m.Duration == 0 && m.MBZRecordingID == "" && m.MBZAlbumID == "" && len(m.MBZArtistIDs) == 0 && m.ISRC == "" &&
 		m.LyricsJSON == "" && len(m.Participants) == 0 && m.BitRate == 0 && m.BitDepth == 0 && m.SampleRate == 0 &&
 		m.Channels == 0 && m.Codec == "" && !m.HasCoverArt
@@ -97,6 +101,9 @@ func (m Metadata) RawTags() model.RawTags {
 	put("track", m.Track)
 	put("disc", m.Disc)
 	put("date", m.Date)
+	put("releasedate", m.ReleaseDate)
+	put("originaldate", m.OriginalDate)
+	put("albumversion", m.AlbumVersion)
 	put("genre", m.Genres...)
 	put("comment", m.Comment)
 	put("musicbrainz_recordingid", m.MBZRecordingID)
@@ -133,16 +140,32 @@ func normalizeRole(value string) string {
 // Merge combines sidecar metadata with extracted values. Trusted sidecars win;
 // otherwise they only fill fields that are absent from the media source.
 func Merge(extracted, nfo model.RawTags, trust bool) model.RawTags {
-	merged := make(model.RawTags, len(extracted)+len(nfo))
-	for name, values := range extracted {
-		merged[name] = append([]string(nil), values...)
-	}
-	for name, values := range nfo {
+	merged := canonicalTags(extracted)
+	for name, values := range canonicalTags(nfo) {
 		if trust || len(merged[name]) == 0 {
 			merged[name] = append([]string(nil), values...)
 		}
 	}
 	return merged
+}
+
+// TagLib commonly emits uppercase keys; NFO emits lowercase. Leaving both
+// in a map makes the later case-folding select a random value on each scan.
+func canonicalTags(tags model.RawTags) model.RawTags {
+	names := make([]string, 0, len(tags))
+	for name := range tags {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make(model.RawTags, len(tags))
+	for _, name := range names {
+		key := strings.ToLower(strings.TrimSpace(name))
+		// Prefer the canonical lowercase spelling when both are present.
+		if _, exists := result[key]; !exists || name == key {
+			result[key] = append([]string(nil), tags[name]...)
+		}
+	}
+	return result
 }
 
 // NFOName returns the established sidecar name ("song.strm" -> "song.nfo").
@@ -328,10 +351,16 @@ func assign(m *Metadata, parent, field, value string) {
 		m.Track = value
 	case "disc", "discnumber":
 		m.Disc = value
-	case "date", "year", "releasedate":
+	case "date", "year":
 		if m.Date == "" || field != "year" {
 			m.Date = value
 		}
+	case "releasedate":
+		m.ReleaseDate = value
+	case "originaldate":
+		m.OriginalDate = value
+	case "albumversion":
+		m.AlbumVersion = value
 	case "genre":
 		m.Genres = append(m.Genres, value)
 	case "comment", "description", "plot":
@@ -507,6 +536,10 @@ type nfoDocument struct {
 	Album          string           `xml:"album,omitempty"`
 	AlbumArtist    string           `xml:"albumartist,omitempty"`
 	Year           string           `xml:"year,omitempty"`
+	Date           string           `xml:"date,omitempty"`
+	ReleaseDate    string           `xml:"releasedate,omitempty"`
+	OriginalDate   string           `xml:"originaldate,omitempty"`
+	AlbumVersion   string           `xml:"albumversion,omitempty"`
 	Track          string           `xml:"track,omitempty"`
 	Disc           string           `xml:"disc,omitempty"`
 	Genres         []string         `xml:"genre,omitempty"`
@@ -575,6 +608,7 @@ func Marshal(m Metadata) ([]byte, error) {
 		Version: "1.1", Generator: Generator, FileInfo: fileInfo, Title: m.Title,
 		Artist: strings.Join(m.Artists, " • "), Album: m.Album, AlbumArtist: strings.Join(m.AlbumArtists, " • "),
 		Year: year, Track: m.Track, Disc: m.Disc, Genres: m.Genres, Comment: m.Comment,
+		Date: m.Date, ReleaseDate: m.ReleaseDate, OriginalDate: m.OriginalDate, AlbumVersion: m.AlbumVersion,
 		BitRate: m.BitRate, BitDepth: m.BitDepth, SampleRate: m.SampleRate, Channels: m.Channels,
 		Codec: m.Codec, HasCoverArt: m.HasCoverArt, Lyrics: m.LyricsJSON,
 		MBZRecordingID: m.MBZRecordingID, MBZAlbumID: m.MBZAlbumID, MBZArtistIDs: m.MBZArtistIDs,

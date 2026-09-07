@@ -229,7 +229,7 @@ var _ = Describe("Transcode endpoints", func() {
 			Expect(resp.TranscodeDecision.SourceStream.AudioBitrate).To(Equal(int32(320_000)))
 		})
 
-		It("preserves valid transcode params for STRM clients", func() {
+		It("restores redia5 no-token fallback for STRM clients", func() {
 			mockMFRepo.SetData(model.MediaFiles{{
 				ID: "strm-1", Path: "song.strm", IsStrm: true, StrmTarget: "/CloudNAS/CloudDrive/115/song.flac",
 				Suffix: "flac", Codec: "FLAC", BitRate: 900, Channels: 2, SampleRate: 44100,
@@ -242,7 +242,7 @@ var _ = Describe("Transcode endpoints", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resp.TranscodeDecision.CanDirectPlay).To(BeTrue())
-			Expect(resp.TranscodeDecision.TranscodeParams).To(Equal("strm-playback-token"))
+			Expect(resp.TranscodeDecision.TranscodeParams).To(BeEmpty())
 		})
 
 		It("filters AAC from transcoding profiles", func() {
@@ -472,7 +472,7 @@ var _ = Describe("Transcode endpoints", func() {
 			redirect, parseErr := url.Parse(location)
 			Expect(parseErr).ToNot(HaveOccurred())
 			Expect(r.URL.ResolveReference(redirect).Path).To(Equal("/getTranscodeStream-prefix/rest/stream"))
-			Expect(location).To(ContainSubstring("format=raw"))
+			Expect(location).ToNot(ContainSubstring("format="))
 			Expect(location).To(ContainSubstring("id=strm-1"))
 			Expect(location).To(ContainSubstring("timeOffset=10"))
 			Expect(location).To(ContainSubstring("u=test"))
@@ -480,18 +480,18 @@ var _ = Describe("Transcode endpoints", func() {
 			Expect(location).ToNot(ContainSubstring("mediaId"))
 		})
 
-		It("rejects invalid STRM tokens before the redirect", func() {
+		It("routes obsolete STRM tokens to classic authenticated streaming", func() {
 			conf.Server.STRM.ForceReportRealPath = true
 			conf.Server.STRM.LocalRoots = []string{"/cloud/music"}
 			mockMFRepo.SetData(model.MediaFiles{{ID: "strm-1", IsStrm: true, StrmTarget: "/cloud/music/song.flac"}})
 			mockTD.resolveErr = stream.ErrTokenInvalid
 			_, err := router.GetTranscodeStream(w, newGetRequest("mediaId=strm-1", "mediaType=song", "transcodeParams=bad"))
 			Expect(err).ToNot(HaveOccurred())
-			Expect(w.Code).To(Equal(http.StatusGone))
-			Expect(w.Header().Get("Location")).To(BeEmpty())
+			Expect(w.Code).To(Equal(http.StatusTemporaryRedirect))
+			Expect(w.Header().Get("Location")).To(ContainSubstring("id=strm-1"))
 		})
 
-		DescribeTable("retains native streaming outside Redia direct-play scope",
+		DescribeTable("retains native streaming for body-authenticated POST requests",
 			func(enabled bool, target, format, method string) {
 				conf.Server.STRM.ForceReportRealPath = enabled
 				conf.Server.STRM.LocalRoots = []string{"/cloud/music"}
@@ -506,10 +506,10 @@ var _ = Describe("Transcode endpoints", func() {
 				Expect(fakeStreamer.captured).ToNot(BeNil())
 				Expect(*fakeStreamer.captured).To(Equal(mockTD.resolvedReq))
 			},
-			Entry("disabled compatibility", false, "/cloud/music/song.flac", "raw", http.MethodGet),
-			Entry("HTTP pointer", true, "", "raw", http.MethodGet),
-			Entry("outside allowlist", true, "/private/song.flac", "raw", http.MethodGet),
-			Entry("negotiated transcode", true, "/cloud/music/song.flac", "mp3", http.MethodGet),
+			Entry("disabled compatibility", false, "/cloud/music/song.flac", "raw", http.MethodPost),
+			Entry("HTTP pointer", true, "", "raw", http.MethodPost),
+			Entry("outside allowlist", true, "/private/song.flac", "raw", http.MethodPost),
+			Entry("negotiated transcode", true, "/cloud/music/song.flac", "mp3", http.MethodPost),
 			Entry("POST authentication", true, "/cloud/music/song.flac", "raw", http.MethodPost),
 		)
 

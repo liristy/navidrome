@@ -156,6 +156,33 @@ func TestMergeTrust(t *testing.T) {
 	}
 }
 
+func TestMergeCaseInsensitiveAlbumIdentity(t *testing.T) {
+	for range 100 {
+		extracted := model.RawTags{"ALBUM": {"Embedded"}, "ALBUMARTIST": {"Original"}}
+		nfo := model.RawTags{"album": {"Sidecar"}, "albumartist": {"Authoritative"}}
+		got := Merge(extracted, nfo, true)
+		if len(got) != 2 || got["album"][0] != "Sidecar" || got["albumartist"][0] != "Authoritative" {
+			t.Fatalf("conflicting case variants escaped merge: %#v", got)
+		}
+		got = Merge(extracted, nfo, false)
+		if len(got) != 2 || got["album"][0] != "Embedded" || got["albumartist"][0] != "Original" {
+			t.Fatalf("fallback overrode embedded metadata: %#v", got)
+		}
+	}
+}
+
+func TestRoundTripPreservesAlbumDates(t *testing.T) {
+	want := Metadata{Title: "Song", Album: "Album", Date: "2024-03-12", ReleaseDate: "2024-06-01", OriginalDate: "2020-01-02", AlbumVersion: "Deluxe"}
+	encoded, err := Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Parse(strings.NewReader(string(encoded)))
+	if err != nil || got.Date != want.Date || got.ReleaseDate != want.ReleaseDate || got.OriginalDate != want.OriginalDate || got.AlbumVersion != want.AlbumVersion {
+		t.Fatalf("album identity changed during NFO round trip: %#v, %v", got, err)
+	}
+}
+
 func TestReadAndAtomicWrite(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "2PM", "Album"), 0o755); err != nil {

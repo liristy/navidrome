@@ -43,7 +43,10 @@ func FromInfo(pointerPath string, info mediametadata.Info) Metadata {
 		AlbumArtists:   all("albumartists", "albumartist", "album artist", "album_artist"),
 		Track:          first("track", "tracknumber"),
 		Disc:           first("disc", "discnumber"),
-		Date:           first("date", "year", "originaldate", "releasedate"),
+		Date:           first("date", "year"),
+		ReleaseDate:    first("releasedate"),
+		OriginalDate:   first("originaldate"),
+		AlbumVersion:   first("albumversion"),
 		Genres:         all("genre"),
 		Comment:        first("comment", "description"),
 		MBZRecordingID: first("musicbrainz_recordingid", "musicbrainz_trackid"),
@@ -79,12 +82,7 @@ func FromInfo(pointerPath string, info mediametadata.Info) Metadata {
 }
 
 func normalizedRawTags(tags model.RawTags) map[string][]string {
-	result := make(map[string][]string, len(tags))
-	for name, values := range tags {
-		key := strings.ToLower(strings.TrimSpace(name))
-		result[key] = append(result[key], values...)
-	}
-	return result
+	return canonicalTags(tags)
 }
 
 func cleanValues(values []string) []string {

@@ -89,6 +89,33 @@ func configureSidecarTest(t *testing.T) {
 	conf.Server.STRM.Metadata.ProbeLocalTargets = false
 }
 
+func TestNFORescanPreservesAlbumIdentity(t *testing.T) {
+	configureSidecarTest(t)
+	const name = "Artist/Album/song.strm"
+	info := metadata.Info{
+		FileInfo: sidecarTestFileInfo{name: "song.strm", size: 77},
+		Tags: model.RawTags{
+			"TITLE": {"Song"}, "ALBUM": {"Album"}, "ALBUMARTIST": {"Artist"},
+			"DATE": {"2024-03-12"}, "RELEASEDATE": {"2024-06-01"}, "ALBUMVERSION": {"Deluxe"},
+		},
+	}
+	want := metadata.New(name, info).ToMediaFile(1, "folder")
+	data, err := sidecar.Marshal(sidecar.FromInfo(name, info))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nfo, err := sidecar.Parse(strings.NewReader(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 100 {
+		got := metadata.New(name, applyNFO(info, nfo, true)).ToMediaFile(1, "folder")
+		if got.AlbumID != want.AlbumID || got.ReleaseDate != want.ReleaseDate || got.Date != want.Date {
+			t.Fatalf("rescan changed album identity: got %s/%s/%s, want %s/%s/%s", got.AlbumID, got.ReleaseDate, got.Date, want.AlbumID, want.ReleaseDate, want.Date)
+		}
+	}
+}
+
 func testDirEntry(t *testing.T, name string, data []byte) fs.DirEntry {
 	t.Helper()
 	entries, err := fs.ReadDir(fstest.MapFS{name: &fstest.MapFile{Data: data}}, ".")

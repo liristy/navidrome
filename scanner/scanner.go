@@ -254,7 +254,9 @@ func (s *scannerImpl) runGC(ctx context.Context, state *scanState) func() error 
 	return func() error {
 		state.sendProgress(&ProgressInfo{ForceUpdate: true})
 		return s.ds.WithTx(func(tx model.DataStore) error {
-			if state.changesDetected.Load() {
+			// A resumed full scan can find no changed files while still carrying
+			// empty albums left by a previously interrupted metadata/ID update.
+			if state.changesDetected.Load() || state.fullScan {
 				start := time.Now()
 
 				// For selective scans, extract library IDs to scope GC operations
