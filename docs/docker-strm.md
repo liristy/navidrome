@@ -15,7 +15,28 @@
 安全 NFO 生成、数据库入库、Redia 所需原生 API 字段、真实路径响应、原始音频逐字节比对及
 FFmpeg MP3 转码。
 
-## 导入
+## Docker Hub 安装
+
+镜像地址：`liristy/navidrome:0.63.2-liristy`，平台为 `linux/amd64`。
+Docker Hub 的账号前缀为 `liristy`，镜像仓库名为 `navidrome`。
+
+将现有 Compose 中 navidrome 服务的 `image:` 修改为：
+
+```yaml
+image: liristy/navidrome:0.63.2-liristy
+```
+
+备份 `/data` 后，在原 Compose 文件所在目录执行：
+
+```sh
+docker-compose pull navidrome
+docker-compose up -d --force-recreate navidrome
+docker-compose exec navidrome /app/navidrome --version
+```
+
+保留原有挂载、端口和 Redia 配置，不用删库。不要省略版本标签；本次只发布版本化标签。
+
+## 离线导入
 
 将 `binaries/navidrome-strm-nfo-linux-amd64.tar` 及其 `.sha256` 上传到 NAS：
 
@@ -36,7 +57,7 @@ docker-compose exec navidrome /app/navidrome --version
 已安装 Compose V2 的主机可把 `docker-compose` 换成 `docker compose`。
 不要替换已有端口、挂载、网络和 Redia 配置。仅 `docker load` 不会更新正在运行的容器。
 
-镜像没有自动推送到公共仓库。替换旧容器前先备份 `/data`，不要让不同版本同时使用同一
+构建脚本不会自动发布镜像。替换旧容器前先备份 `/data`，不要让不同版本同时使用同一
 数据库；首次建议使用独立测试数据目录。
 
 ### 旧 Redia 镜像数据库兼容
@@ -56,7 +77,7 @@ docker-compose exec navidrome /app/navidrome --version
 ```yaml
 services:
   navidrome:
-    image: navidrome:0.63.2-liristy
+    image: liristy/navidrome:0.63.2-liristy
     restart: unless-stopped
     ports:
       - "4533:4533"
