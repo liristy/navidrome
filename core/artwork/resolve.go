@@ -524,6 +524,12 @@ func resolveEmbedded(ctx context.Context, lib libraryView, ffm ffmpeg.FFmpeg, em
 				return resolution{localError: true}, false
 			}
 		}
+		// Resolving even a "local" CloudDrive target may perform remote I/O.
+		// Artwork has its own opt-in: enabling missing-NFO scraping must not
+		// cause cover workers to reopen songs that already have local metadata.
+		if !conf.Server.STRM.Metadata.ProbeEmbeddedCover {
+			return resolution{}, false
+		}
 		if resolver, ok := lib.FS.(storage.STRMTargetResolverFS); ok {
 			if target, err := resolver.ResolveSTRMTarget(embedRel); err == nil {
 				if reader, sourcePath, extractErr := fromFFmpegTag(ctx, ffm, target)(); reader != nil {
@@ -533,6 +539,9 @@ func resolveEmbedded(ctx context.Context, lib libraryView, ffm ffmpeg.FFmpeg, em
 				}
 			}
 		}
+		// A STRM is text, not embedded audio. Never pass the pointer itself to
+		// generic media extractors after the target attempt.
+		return resolution{}, false
 	}
 	abs := lib.Abs(embedRel)
 	var unreadable bool

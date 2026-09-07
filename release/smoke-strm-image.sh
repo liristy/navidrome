@@ -138,4 +138,65 @@ codec=$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of
 test "$codec" = mp3
 wget -q -O "$test_root/index.html" http://127.0.0.1:4533/app/
 grep -i '<html' "$test_root/index.html" > /dev/null
-echo 'PASS: startup, UI, metadata scrape, NFO, STRM scan, native-API compatibility, redia5 no-token fallback, cached-token redirect, Range/206, classic MP3 parameters, forced real-path response, raw playback and FFmpeg transcoding'
+# Finish the scan before checking watcher-only restarts. All data here belongs
+# to this disposable container, never a mounted production library.
+wait_scan_idle() {
+    count=0
+    while [ "$(sqlite3 "$test_root/data/navidrome.db" "select count(*) from library where last_scan_started_at not like '0001-%';")" != 0 ]; do
+        count=$((count + 1))
+        if [ "$count" -ge 45 ]; then cat "$test_root/server.log"; exit 1; fi
+        sleep 1
+    done
+}
+# A fresh test database also schedules its migration scan after a 2s delay.
+# Do not stop this tiny fixture before that startup task consumes its flag.
+sleep 3
+wait_scan_idle
+before_restart=$(sqlite3 "$test_root/data/navidrome.db" "select value from property where id='LastScanStartTime';")
+kill "$server_pid"
+wait "$server_pid"
+mv "$track" "$test_root/offline-target.flac"
+export ND_SCANNER_SCANONSTARTUP=false ND_SCANNER_SCHEDULE=0 ND_SCANNER_WATCHERWAIT=1s
+export ND_SCANNER_FOLLOWSYMLINKS=false ND_STRM_METADATA_PROBELOCALTARGETS=true
+export ND_STRM_METADATA_PROBEEMBEDDEDCOVER=false
+export ND_SCANNER_SIDECAR_GENERATEONSTARTUP=true
+export ND_LOGLEVEL=info
+/app/navidrome >> "$test_root/server.log" 2>&1 &
+server_pid=$!
+count=0
+until wget -q -O /dev/null http://127.0.0.1:4533/ping; do
+    count=$((count + 1))
+    if [ "$count" -ge 45 ] || ! kill -0 "$server_pid" 2>/dev/null; then cat "$test_root/server.log"; exit 1; fi
+    sleep 1
+done
+sleep 3
+if [ "$(sqlite3 "$test_root/data/navidrome.db" "select value from property where id='LastScanStartTime';")" != "$before_restart" ]; then
+    cat "$test_root/server.log"
+    echo 'FAIL: completed library was rescanned on watcher-only restart' >&2
+    exit 1
+fi
+# New local files must trigger the watcher even with startup scanning disabled.
+cp "$nfo" "$test_root/music/Local Added.nfo"
+printf '%s\n' "$track" > "$test_root/music/Local Added.strm"
+count=0
+until [ "$(sqlite3 "$test_root/data/navidrome.db" "select count(*) from media_file where path='Local Added.strm' and title='Target Metadata Title';")" = 1 ]; do
+    count=$((count + 1))
+    if [ "$count" -ge 45 ]; then cat "$test_root/server.log"; echo 'FAIL: local watcher did not import NFO' >&2; exit 1; fi
+    sleep 1
+done
+wait_scan_idle
+test "$(sqlite3 "$test_root/data/navidrome.db" 'select count(*) from album;')" = 1
+# Missing NFOs still scrape a newly added target, then become local cache hits.
+cp "$test_root/offline-target.flac" "$cloud_root/new.flac"
+printf '%s\n' "$cloud_root/new.flac" > "$test_root/music/Needs Metadata.strm"
+count=0
+until [ -f "$test_root/music/Needs Metadata.nfo" ] && [ "$(sqlite3 "$test_root/data/navidrome.db" "select count(*) from media_file where path='Needs Metadata.strm' and title='Target Metadata Title';")" = 1 ]; do
+    count=$((count + 1))
+    if [ "$count" -ge 45 ]; then cat "$test_root/server.log"; echo 'FAIL: missing NFO was not scraped' >&2; exit 1; fi
+    sleep 1
+done
+wait_scan_idle
+grep -F '<title>Target Metadata Title</title>' "$test_root/music/Needs Metadata.nfo" > /dev/null
+test "$(sqlite3 "$test_root/data/navidrome.db" 'select count(*) from media_file;')" = 3
+test "$(sqlite3 "$test_root/data/navidrome.db" 'select count(*) from album;')" = 1
+echo 'PASS: Redia, Range/206, MP3, watcher-only restart, offline NFO reuse and missing-NFO target scraping'

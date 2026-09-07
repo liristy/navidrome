@@ -1,5 +1,8 @@
 # STRM + NFO Docker 镜像
 
+当前修复版：`liristy/navidrome:0.63.2-liristy-fix3` / `latest`。
+Redia 网盘用户推荐[本地监听、缺失 NFO 才刮削配置](strm-watch.md)。下文构建版本信息含历史记录。
+
 镜像由当前工作区的 Navidrome 源码构建，加入 STRM、目标元数据提取和 NFO 支持。
 本次已验证的 `linux/amd64` 镜像标签为
 `navidrome:0.63.2-liristy`（镜像仓库名已简化为 `navidrome`）。此前导出包中的旧标签仍为
@@ -74,6 +77,9 @@ docker-compose exec navidrome /app/navidrome --version
 
 ## Compose 示例
 
+下面示例会开启目标音频刮削，**不适合只想监听本地 STRM/NFO 的网盘用户**。
+只读本地旁挂文件请使用[本地监听配置](strm-local-only.md)和 `contrib/docker-compose.strm-local.yml`。
+
 ```yaml
 services:
   navidrome:
@@ -111,16 +117,13 @@ root 用户运行 Navidrome，但所配置的 UID/GID 必须能写 `/data` 和 `
 读取已有 NFO，可关闭 `ND_STRM_METADATA_PROBELOCALTARGETS` 和
 `ND_SCANNER_SIDECAR_GENERATEONSTARTUP`，保留 Sidecar Enabled。
 
-`redia3` 起修复了目标探测曾错误依赖“启用 NFO 且缺少 NFO”的问题。现在只要
-`ND_STRM_METADATA_PROBELOCALTARGETS=true`，无论是否启用 Sidecar、是否已有 NFO，扫描都会
-像旧参考镜像一样读取白名单内真实音频的标签、大小、时长、码率、采样率、位深和声道数。
+新修复优先读取已启用的本地 NFO，不再先探测目标音频。没有 NFO 或未启用 Sidecar 时，
+仅在 `ND_STRM_METADATA_PROBELOCALTARGETS=true` 下允许读取目标。要禁止后台回源，
+请设为 false；封面回源由独立的 `ND_STRM_METADATA_PROBEEMBEDDEDCOVER` 控制，默认 false。
 
-`liristy` 修正了先前对所有 STRM 一律回退的实现：现在正常签发并校验新版转码令牌。
-仅在 `ND_STRM_FORCEREPORTREALPATH=true`、本地目标在白名单内、GET/HEAD 且决策为原码播放时，
-`getTranscodeStream` 才以同域 `307` 转到 `stream`，让请求重新经过代理入口。
-跳转保留部署子路径并使用兼容性更好的绝对路径；Range 请求继续支持 206。需要 MP3 等转码时保留协商的格式、
-码率、采样率等参数；HTTP STRM、关闭兼容模式和 POST 请求不强制跳转。
-无效或过期令牌返回 410，升级后若客户端缓存旧令牌，请刷新页面或重新播放。
+fix1 起恢复 redia5 的 STRM 无令牌回退：客户端使用经典 stream，缓存的
+getTranscodeStream GET/HEAD 同域 307 到 stream，保留经典格式/码率参数。
+正常认证与歌曲访问检查保持有效；完整说明见 [fix1](strm-fix1.md)。
 
 同时修复：未知音频大小不再用 STRM 文本长度写入新 NFO；HTTP STRM 的 POST 播放会以 GET
 读取上游，避免上游拒绝 POST；新版流接口不会在正常 HEAD/304/416 空响应后追加错误内容。

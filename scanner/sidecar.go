@@ -36,15 +36,14 @@ func applyTrackSidecar(ctx context.Context, fsys fs.FS, filePath string, info me
 		return info, ""
 	}
 
-	// Reading metadata from an allowlisted local STRM target is a scanner
-	// capability, not a sidecar-generation feature. Keep it active even when
-	// NFO support is disabled or an NFO already exists. This also matches the
-	// established Redia-compatible Navidrome behaviour.
-	info = applySTRMTargetMetadata(ctx, fsys, filePath, info)
 	if !options.Enabled || options.Format != "nfo" {
-		return info, ""
+		return applySTRMTargetMetadata(ctx, fsys, filePath, info), ""
 	}
 
+	// Existing sidecars are the local metadata cache. Check them before any
+	// target access: a full scan or restart must not re-open CloudDrive audio
+	// merely to merge the same NFO afterwards. Trust still controls whether
+	// the NFO overrides explicit EXTINF values in the pointer.
 	value, _, err := sidecar.Read(fsys, filePath)
 	if err == nil {
 		return applyNFO(info, value, options.Trust), ""
@@ -53,6 +52,9 @@ func applyTrackSidecar(ctx context.Context, fsys fs.FS, filePath string, info me
 		log.Warn("Scanner: Ignoring invalid track NFO", "file", filePath, err)
 		return info, ""
 	}
+	// Only a missing NFO may use explicitly enabled target probing. Invalid
+	// or unreadable sidecars above are preserved without a cloud fallback.
+	info = applySTRMTargetMetadata(ctx, fsys, filePath, info)
 	if !options.GenerateOnStartup || !strm.IsFile(filePath) {
 		return info, ""
 	}

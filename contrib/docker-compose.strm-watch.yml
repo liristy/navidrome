@@ -1,0 +1,18 @@
+# Merge environment into your existing service. Keep original volumes/network.
+# /music is the LOCAL STRM/NFO/cover directory. CloudDrive is only a target mount.
+services:
+  navidrome:
+    environment:
+      ND_SCANNER_ENABLED: "true"
+      ND_SCANNER_SCANONSTARTUP: "false"
+      ND_SCANNER_SCHEDULE: "0"
+      ND_SCANNER_WATCHERWAIT: "5s"
+      ND_SCANNER_FOLLOWSYMLINKS: "false"
+      ND_STRM_METADATA_PROBELOCALTARGETS: "true"
+      ND_STRM_METADATA_PROBECONCURRENCY: "1"
+      ND_STRM_METADATA_PROBEEMBEDDEDCOVER: "false"
+      ND_SCANNER_SIDECAR_ENABLED: "true"
+      ND_SCANNER_SIDECAR_FORMAT: "nfo"
+      ND_SCANNER_SIDECAR_TRUST: "true"
+      ND_SCANNER_SIDECAR_READONLY: "true"
+      ND_SCANNER_SIDECAR_GENERATEONSTARTUP: "true"

@@ -17,6 +17,7 @@ import (
 	"github.com/navidrome/navidrome/model"
 	"github.com/navidrome/navidrome/resources"
 	"github.com/navidrome/navidrome/utils/cache"
+	"github.com/navidrome/navidrome/utils/strm"
 )
 
 var ErrUnavailable = errors.New("artwork unavailable")
@@ -207,8 +208,12 @@ func openOriginal(ia *model.ItemArtwork, mime string, store *ImageStore) (io.Rea
 		}
 		return f, nil
 	}
-	// Store-backed bytes still carry the source's mtime, to detect edits to embedded art.
-	if ia.SourcePath != "" && ia.RefMtime != 0 {
+	// Store-backed bytes carry source provenance. In local-only mode serve the
+	// cached snapshot without even stat'ing an allowlisted cloud source: a
+	// previous release may have stored a CloudDrive path here.
+	skipTargetStat := ia.Source == "embedded" && !conf.Server.STRM.Metadata.ProbeEmbeddedCover &&
+		strm.AllowedLocalPath(ia.SourcePath, conf.Server.STRM.LocalRoots)
+	if ia.SourcePath != "" && ia.RefMtime != 0 && !skipTargetStat {
 		info, err := os.Stat(ia.SourcePath)
 		if err != nil {
 			return nil, err

@@ -339,6 +339,56 @@ func TestNeedsMissingSidecarGenerationForUnchangedFolder(t *testing.T) {
 	}
 }
 
+func TestExistingNFONeverProbesTarget(t *testing.T) {
+	for _, trust := range []bool{true, false} {
+		for _, appended := range []bool{true, false} {
+			configureSidecarTest(t)
+			conf.Server.Scanner.Sidecar.Trust = trust
+			conf.Server.Scanner.Sidecar.GenerateOnStartup = true
+			conf.Server.STRM.Metadata.ProbeLocalTargets = true
+			conf.Server.STRM.LocalRoots = []string{"/cloud"}
+			const name = "Artist/Album/song.strm"
+			nfoName := sidecar.NFOName(name)
+			if appended {
+				nfoName = name + ".nfo"
+			}
+			f := &recordingNFOFS{FS: fstest.MapFS{
+				name:    {Data: []byte("/cloud/song.flac")},
+				nfoName: {Data: []byte(`<track><title>Cached Song</title><album>Album</album><artist>Artist</artist></track>`)},
+			}}
+			pointer := metadata.Info{StrmTarget: "/cloud/song.flac", Tags: model.RawTags{"title": {"Pointer Song"}}}
+			for range 3 {
+				got, generated := applyTrackSidecar(context.Background(), f, name, pointer)
+				wantTitle := "Pointer Song"
+				if trust {
+					wantTitle = "Cached Song"
+				}
+				if f.targetReadCall != 0 || len(f.writes) != 0 || generated != "" || got.Tags["title"][0] != wantTitle || got.StrmTarget != pointer.StrmTarget {
+					t.Fatalf("existing NFO read touched cloud, generated files or lost pointer metadata: calls=%d result=%+v", f.targetReadCall, got)
+				}
+			}
+		}
+	}
+}
+
+func TestLocalOnlySidecarScanNeverProbesTarget(t *testing.T) {
+	for _, nfo := range []string{"", `<movie><title>Invalid</title></movie>`} {
+		configureSidecarTest(t)
+		conf.Server.STRM.Metadata.ProbeLocalTargets = false
+		conf.Server.STRM.LocalRoots = []string{"/cloud"}
+		const name = "Artist/Album/song.strm"
+		files := fstest.MapFS{name: {Data: []byte("/cloud/song.flac")}}
+		if nfo != "" {
+			files[sidecar.NFOName(name)] = &fstest.MapFile{Data: []byte(nfo)}
+		}
+		f := &recordingNFOFS{FS: files}
+		_, generated := applyTrackSidecar(context.Background(), f, name, metadata.Info{})
+		if f.targetReadCall != 0 || len(f.writes) != 0 || generated != "" {
+			t.Fatal("local-only scan attempted target probing or sidecar generation")
+		}
+	}
+}
+
 func TestPurgeDeletesOnlyManagedSTRMSidecarAfterDatabaseDelete(t *testing.T) {
 	configureSidecarTest(t)
 	conf.Server.Scanner.Sidecar.DeleteOnPurge = true

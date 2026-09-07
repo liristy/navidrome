@@ -208,8 +208,9 @@ type strmOptions struct {
 // scanning. It is disabled by default because opening a CloudDrive/FUSE target
 // may trigger network I/O; HTTP targets are never probed by this feature.
 type strmMetadataOptions struct {
-	ProbeLocalTargets bool
-	ProbeConcurrency  int
+	ProbeLocalTargets  bool
+	ProbeConcurrency   int
+	ProbeEmbeddedCover bool // Independent opt-in: artwork must not reopen cloud audio just because metadata scraping is enabled.
 }
 
 type subsonicOptions struct {
@@ -1122,6 +1123,7 @@ func setViperDefaults() {
 	viper.SetDefault("subsonic.artistparticipations", false)
 	viper.SetDefault("subsonic.defaultreportrealpath", false)
 	viper.SetDefault("strm.localroots", []string{})
+	viper.SetDefault("strm.metadata.probeembeddedcover", false)
 	viper.SetDefault("strm.forcereportrealpath", false)
 	viper.SetDefault("strm.metadata.probelocaltargets", false)
 	viper.SetDefault("strm.metadata.probeconcurrency", 2)

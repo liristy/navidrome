@@ -1,0 +1,17 @@
+# Merge with the existing Compose file; keep the current image/network/volumes.
+# /music must be a LOCAL STRM/NFO/cover directory, not the CloudDrive audio root.
+services:
+  navidrome:
+    environment:
+      ND_SCANNER_ENABLED: "true"
+      ND_SCANNER_SCANONSTARTUP: "false"
+      ND_SCANNER_SCHEDULE: "0"
+      ND_SCANNER_WATCHERWAIT: "5s"
+      ND_SCANNER_FOLLOWSYMLINKS: "false"
+      ND_STRM_METADATA_PROBELOCALTARGETS: "false"
+      ND_STRM_METADATA_PROBEEMBEDDEDCOVER: "false"
+      ND_SCANNER_SIDECAR_ENABLED: "true"
+      ND_SCANNER_SIDECAR_FORMAT: "nfo"
+      ND_SCANNER_SIDECAR_TRUST: "true"
+      ND_SCANNER_SIDECAR_READONLY: "true"
+      ND_SCANNER_SIDECAR_GENERATEONSTARTUP: "false"

@@ -62,6 +62,7 @@ var _ = Describe("Configuration", func() {
 			Expect(conf.Server.Scanner.Sidecar.Enabled).To(BeFalse())
 			Expect(conf.Server.Scanner.Sidecar.GenerateOnStartup).To(BeFalse())
 			Expect(conf.Server.STRM.Metadata.ProbeLocalTargets).To(BeFalse())
+			Expect(conf.Server.STRM.Metadata.ProbeEmbeddedCover).To(BeFalse())
 			Expect(conf.Server.STRM.Metadata.ProbeConcurrency).To(Equal(2))
 		})
 
@@ -89,6 +90,14 @@ var _ = Describe("Configuration", func() {
 			conf.Load(true)
 			Expect(conf.Server.STRM.Metadata.ProbeLocalTargets).To(BeTrue())
 			Expect(conf.Server.STRM.Metadata.ProbeConcurrency).To(Equal(3))
+		})
+
+		It("loads an independent embedded-cover probe opt-in", func() {
+			GinkgoT().Setenv("ND_STRM_METADATA_PROBEEMBEDDEDCOVER", "true")
+			conf.InitConfig("", true)
+			conf.Load(true)
+			Expect(conf.Server.STRM.Metadata.ProbeEmbeddedCover).To(BeTrue())
+			Expect(conf.Server.STRM.Metadata.ProbeLocalTargets).To(BeFalse())
 		})
 
 		It("rejects unsupported sidecar formats", func() {
