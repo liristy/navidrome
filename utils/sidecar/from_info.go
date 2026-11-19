@@ -53,6 +53,8 @@ func FromInfo(pointerPath string, info mediametadata.Info) Metadata {
 		MBZAlbumID:     first("musicbrainz_albumid"),
 		MBZArtistIDs:   all("musicbrainz_artistid"),
 		ISRC:           first("isrc"),
+		WordLyrics:     first("lyrics_word", "txxx:lyrics_word", "----:com.apple.itunes:lyrics_word"),
+		Translation:    first("lyrics_translation", "txxx:lyrics_translation", "----:com.apple.itunes:lyrics_translation"),
 		Duration:       info.AudioProperties.Duration,
 		BitRate:        info.AudioProperties.BitRate,
 		BitDepth:       info.AudioProperties.BitDepth,

@@ -60,6 +60,8 @@ type Metadata struct {
 	MBZArtistIDs   []string
 	ISRC           string
 	LyricsJSON     string
+	WordLyrics     string
+	Translation    string
 	Participants   []Participant
 	BitRate        int
 	BitDepth       int
@@ -232,7 +234,6 @@ func Parse(r io.Reader) (Metadata, error) {
 	}
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	var m Metadata
-	var wordLyrics, translatedLyrics string
 	var stack []string
 	var textStack [][]byte
 	var currentParticipant *Participant
@@ -297,9 +298,9 @@ func Parse(r io.Reader) (Metadata, error) {
 			if len(stack) == 2 {
 				switch field {
 				case "lyricsword":
-					wordLyrics = textValue
+					m.WordLyrics = textValue
 				case "lyricstranslation":
-					translatedLyrics = textValue
+					m.Translation = textValue
 				}
 			}
 			assign(&m, parent, field, textValue)
@@ -313,33 +314,40 @@ func Parse(r io.Reader) (Metadata, error) {
 			textStack = textStack[:len(textStack)-1]
 		}
 	}
-	var lyrics model.LyricList
-	if m.LyricsJSON != "" {
-		if err := json.Unmarshal([]byte(m.LyricsJSON), &lyrics); err != nil {
-			return Metadata{}, fmt.Errorf("invalid NFO lyrics JSON: %w", err)
-		}
+	m.LyricsJSON, err = m.StructuredLyricsJSON(context.Background())
+	if err != nil {
+		return Metadata{}, err
 	}
-	if wordLyrics != "" || translatedLyrics != "" {
-		updated, changed, err := mergeLyricFields(lyrics, wordLyrics, translatedLyrics)
-		if err != nil {
-			return Metadata{}, err
-		}
-		if changed {
-			data, err := json.Marshal(updated)
-			if err != nil {
-				return Metadata{}, fmt.Errorf("encode NFO lyrics: %w", err)
-			}
-			m.LyricsJSON = string(data)
-		}
-	}
+	m.WordLyrics, m.Translation = "", ""
 	if m.Empty() {
 		return Metadata{}, errors.New("NFO contains no supported track metadata")
 	}
 	return m, nil
 }
 
-// mergeLyricFields folds the separate NFO tracks into the lyric list used by the scanner.
-func mergeLyricFields(lyrics model.LyricList, word, translation string) (model.LyricList, bool, error) {
+// StructuredLyricsJSON validates the base lyrics and merges the separate tracks for storage.
+func (m Metadata) StructuredLyricsJSON(ctx context.Context) (string, error) {
+	var lyrics model.LyricList
+	if m.LyricsJSON != "" {
+		if err := json.Unmarshal([]byte(m.LyricsJSON), &lyrics); err != nil {
+			return "", fmt.Errorf("invalid NFO lyrics JSON: %w", err)
+		}
+	}
+	updated, changed, err := mergeLyricFields(ctx, lyrics, m.WordLyrics, m.Translation)
+	if err != nil {
+		return "", err
+	}
+	if !changed {
+		return m.LyricsJSON, nil
+	}
+	data, err := json.Marshal(updated)
+	if err != nil {
+		return "", fmt.Errorf("encode NFO lyrics: %w", err)
+	}
+	return string(data), nil
+}
+
+func mergeLyricFields(ctx context.Context, lyrics model.LyricList, word, translation string) (model.LyricList, bool, error) {
 	changed := false
 	if word != "" {
 		mainIndex := slices.IndexFunc(lyrics, model.Lyrics.IsMainKind)
@@ -347,7 +355,7 @@ func mergeLyricFields(lyrics model.LyricList, word, translation string) (model.L
 		if mainIndex >= 0 && lyrics[mainIndex].Lang != "" {
 			lang = lyrics[mainIndex].Lang
 		}
-		parsed, err := model.ParseLyrics(context.Background(), ".lrc", lang, []byte(word))
+		parsed, err := model.ParseLyrics(ctx, ".lrc", lang, []byte(word))
 		if err != nil {
 			return nil, false, fmt.Errorf("parse NFO word lyrics: %w", err)
 		}
@@ -369,7 +377,7 @@ func mergeLyricFields(lyrics model.LyricList, word, translation string) (model.L
 		}
 	}
 	if translation != "" {
-		parsed, err := model.ParseLyrics(context.Background(), ".lrc", "xxx", []byte(translation))
+		parsed, err := model.ParseLyrics(ctx, ".lrc", "xxx", []byte(translation))
 		if err != nil {
 			return nil, false, fmt.Errorf("parse NFO translated lyrics: %w", err)
 		}
@@ -626,6 +634,8 @@ type nfoDocument struct {
 	Codec          string           `xml:"codec,omitempty"`
 	HasCoverArt    bool             `xml:"hascoverart"`
 	Lyrics         string           `xml:"lyrics,omitempty"`
+	WordLyrics     string           `xml:"lyrics_word,omitempty"`
+	Translation    string           `xml:"lyrics_translation,omitempty"`
 	MBZRecordingID string           `xml:"musicbrainzrecordingid,omitempty"`
 	MBZAlbumID     string           `xml:"musicbrainzalbumid,omitempty"`
 	MBZArtistIDs   []string         `xml:"musicbrainzartistid,omitempty"`
@@ -685,6 +695,7 @@ func Marshal(m Metadata) ([]byte, error) {
 		Date: m.Date, ReleaseDate: m.ReleaseDate, OriginalDate: m.OriginalDate, AlbumVersion: m.AlbumVersion,
 		BitRate: m.BitRate, BitDepth: m.BitDepth, SampleRate: m.SampleRate, Channels: m.Channels,
 		Codec: m.Codec, HasCoverArt: m.HasCoverArt, Lyrics: m.LyricsJSON,
+		WordLyrics: m.WordLyrics, Translation: m.Translation,
 		MBZRecordingID: m.MBZRecordingID, MBZAlbumID: m.MBZAlbumID, MBZArtistIDs: m.MBZArtistIDs,
 		ISRC: m.ISRC, Participants: participants, CachedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		ScannedBy: "Navidrome STRM Sidecar",

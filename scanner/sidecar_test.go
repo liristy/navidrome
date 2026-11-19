@@ -1,7 +1,9 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -256,13 +258,15 @@ func TestApplyTrackSidecarScrapesAllowlistedLocalTarget(t *testing.T) {
 		targetInfo: metadata.Info{
 			Suffix: "flac",
 			Tags: model.RawTags{
-				"title":        {"Tik Tok"},
-				"artists":      {"2PM", "尹恩惠"},
-				"album":        {"Tik Tok"},
-				"albumartists": {"2PM"},
-				"date":         {"2010"},
-				"track":        {"1"},
-				"lyrics:xxx":   {"[00:00.53]Tik Tok"},
+				"title":              {"Tik Tok"},
+				"artists":            {"2PM", "尹恩惠"},
+				"album":              {"Tik Tok"},
+				"albumartists":       {"2PM"},
+				"date":               {"2010"},
+				"track":              {"1"},
+				"lyrics:xxx":         {"[00:00.53]Tik Tok"},
+				"LYRICS_WORD":        {"[00:00.53]<00:00.53>Tik <00:01.00>Tok<00:02.00>"},
+				"LYRICS_TRANSLATION": {"[00:00.53]滴答"},
 			},
 			AudioProperties: metadata.AudioProperties{Duration: 249400 * time.Millisecond, BitRate: 992, SampleRate: 44100, Channels: 2, Codec: "flac"},
 			HasPicture:      true,
@@ -280,6 +284,29 @@ func TestApplyTrackSidecarScrapesAllowlistedLocalTarget(t *testing.T) {
 	}
 	if got.AudioProperties.BitRate != 992 || got.LyricsJSON == "" || !got.HasPicture {
 		t.Fatalf("scraped metadata was not imported: %#v", got)
+	}
+	data, err := sidecar.Marshal(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("<lyrics_word>")) || !bytes.Contains(data, []byte("<lyrics_translation>")) {
+		t.Fatalf("missing generated NFO lyric fields: %s", data)
+	}
+	reloaded, err := sidecar.Parse(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LyricsJSON != reloaded.LyricsJSON {
+		t.Fatal("first scan and NFO reload produced different lyrics")
+	}
+	var lyrics model.LyricList
+	if err := json.Unmarshal([]byte(got.LyricsJSON), &lyrics); err != nil {
+		t.Fatal(err)
+	}
+	if len(lyrics) != 2 || len(lyrics[0].Line[0].Cue) != 2 ||
+		lyrics[1].Kind != model.LyricKindTranslation || lyrics[1].Line[0].Value != "滴答" ||
+		*lyrics[0].Line[0].Start != *lyrics[1].Line[0].Start {
+		t.Fatalf("unexpected generated lyrics: %#v", lyrics)
 	}
 }
 

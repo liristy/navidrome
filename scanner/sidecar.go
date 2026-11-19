@@ -95,6 +95,14 @@ func applyTrackSidecar(ctx context.Context, fsys fs.FS, filePath string, info me
 		return info, ""
 	}
 	if created {
+		if generatedValue.WordLyrics != "" || generatedValue.Translation != "" {
+			lyrics, err := generatedValue.StructuredLyricsJSON(ctx)
+			if err != nil {
+				log.Warn(ctx, "Scanner: Could not merge generated NFO lyric tracks", "file", filePath, err)
+			} else {
+				info.LyricsJSON = lyrics
+			}
+		}
 		log.Info("Scanner: Generated track NFO", "file", filePath, "sidecar", name)
 		return info, name
 	}
