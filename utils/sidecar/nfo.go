@@ -6,6 +6,7 @@ package sidecar
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -230,6 +232,7 @@ func Parse(r io.Reader) (Metadata, error) {
 	}
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	var m Metadata
+	var wordLyrics, translatedLyrics string
 	var stack []string
 	var textStack [][]byte
 	var currentParticipant *Participant
@@ -291,6 +294,14 @@ func Parse(r io.Reader) (Metadata, error) {
 					currentParticipant.Role = textValue
 				}
 			}
+			if len(stack) == 2 {
+				switch field {
+				case "lyricsword":
+					wordLyrics = textValue
+				case "lyricstranslation":
+					translatedLyrics = textValue
+				}
+			}
 			assign(&m, parent, field, textValue)
 			if field == "participant" && currentParticipant != nil {
 				if currentParticipant.Name != "" && normalizeRole(currentParticipant.Role) != "" {
@@ -302,16 +313,79 @@ func Parse(r io.Reader) (Metadata, error) {
 			textStack = textStack[:len(textStack)-1]
 		}
 	}
-	if m.Empty() {
-		return Metadata{}, errors.New("NFO contains no supported track metadata")
-	}
+	var lyrics model.LyricList
 	if m.LyricsJSON != "" {
-		var lyrics model.LyricList
 		if err := json.Unmarshal([]byte(m.LyricsJSON), &lyrics); err != nil {
 			return Metadata{}, fmt.Errorf("invalid NFO lyrics JSON: %w", err)
 		}
 	}
+	if wordLyrics != "" || translatedLyrics != "" {
+		updated, changed, err := mergeLyricFields(lyrics, wordLyrics, translatedLyrics)
+		if err != nil {
+			return Metadata{}, err
+		}
+		if changed {
+			data, err := json.Marshal(updated)
+			if err != nil {
+				return Metadata{}, fmt.Errorf("encode NFO lyrics: %w", err)
+			}
+			m.LyricsJSON = string(data)
+		}
+	}
+	if m.Empty() {
+		return Metadata{}, errors.New("NFO contains no supported track metadata")
+	}
 	return m, nil
+}
+
+// mergeLyricFields folds the separate NFO tracks into the lyric list used by the scanner.
+func mergeLyricFields(lyrics model.LyricList, word, translation string) (model.LyricList, bool, error) {
+	changed := false
+	if word != "" {
+		mainIndex := slices.IndexFunc(lyrics, model.Lyrics.IsMainKind)
+		lang := "xxx"
+		if mainIndex >= 0 && lyrics[mainIndex].Lang != "" {
+			lang = lyrics[mainIndex].Lang
+		}
+		parsed, err := model.ParseLyrics(context.Background(), ".lrc", lang, []byte(word))
+		if err != nil {
+			return nil, false, fmt.Errorf("parse NFO word lyrics: %w", err)
+		}
+		if len(parsed) > 0 && parsed[0].Synced {
+			enhanced := parsed[0]
+			if mainIndex < 0 {
+				lyrics = append(model.LyricList{enhanced}, lyrics...)
+			} else {
+				main := lyrics[mainIndex]
+				if enhanced.DisplayArtist == "" {
+					enhanced.DisplayArtist = main.DisplayArtist
+				}
+				if enhanced.DisplayTitle == "" {
+					enhanced.DisplayTitle = main.DisplayTitle
+				}
+				lyrics[mainIndex] = enhanced
+			}
+			changed = true
+		}
+	}
+	if translation != "" {
+		parsed, err := model.ParseLyrics(context.Background(), ".lrc", "xxx", []byte(translation))
+		if err != nil {
+			return nil, false, fmt.Errorf("parse NFO translated lyrics: %w", err)
+		}
+		for _, track := range parsed {
+			if slices.ContainsFunc(lyrics, func(existing model.Lyrics) bool {
+				return existing.EffectiveKind() == model.LyricKindTranslation &&
+					strings.EqualFold(existing.Lang, track.Lang)
+			}) {
+				continue
+			}
+			track.Kind = model.LyricKindTranslation
+			lyrics = append(lyrics, track)
+			changed = true
+		}
+	}
+	return lyrics, changed, nil
 }
 
 func normalizeName(value string) string {

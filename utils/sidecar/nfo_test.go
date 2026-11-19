@@ -1,6 +1,7 @@
 package sidecar
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -50,6 +51,32 @@ func TestParseRediaMusicFileNFO(t *testing.T) {
 	raw := m.RawTags()
 	if got := raw["artist"]; len(got) != 2 || got[0] != "2PM" || got[1] != "尹恩惠" {
 		t.Fatalf("participants did not override display artist: %#v", got)
+	}
+}
+
+func TestParseNFOWithSeparateLyrics(t *testing.T) {
+	input := `<musicfile>
+  <lyrics>[{"lang":"kor","line":[{"start":1000,"value":"첫 줄"}],"synced":true}]</lyrics>
+  <lyrics_word>[00:00.686]&lt;00:00.686&gt;첫 &lt;00:01.000&gt;줄&lt;00:02.000&gt;</lyrics_word>
+  <lyrics_translation>[lang:zho]
+[00:00.686]第一行 &amp; 更多</lyrics_translation>
+</musicfile>`
+	m, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lyrics model.LyricList
+	if err := json.Unmarshal([]byte(m.LyricsJSON), &lyrics); err != nil {
+		t.Fatal(err)
+	}
+	if len(lyrics) != 2 || !lyrics[0].IsMainKind() || lyrics[0].Lang != "kor" ||
+		lyrics[1].Kind != model.LyricKindTranslation || lyrics[1].Lang != "zho" || !lyrics[1].Synced {
+		t.Fatalf("unexpected lyrics: %#v", lyrics)
+	}
+	main, translation := lyrics[0].Line[0], lyrics[1].Line[0]
+	if main.Value != "첫 줄" || len(main.Cue) != 2 || *main.Start != 686 ||
+		translation.Value != "第一行 & 更多" || *translation.Start != *main.Start {
+		t.Fatalf("unexpected lyric lines: %#v / %#v", main, translation)
 	}
 }
 
