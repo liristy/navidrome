@@ -248,6 +248,7 @@ func parseEnhancedLine(text string) (string, []Cue) {
 
 	type segment struct {
 		start    int64
+		end      *int64
 		rawStart int
 		rawEnd   int
 	}
@@ -255,6 +256,7 @@ func parseEnhancedLine(text string) (string, []Cue) {
 	segments := make([]segment, 0, len(matches))
 	var rawValue strings.Builder
 	var trailingEnd *int64
+	lastTextMarker := -1
 	for i, match := range matches {
 		timeMs, err := parseTime(
 			// Rewrite <...> as [...] so parseTime can handle it with the same logic
@@ -283,6 +285,13 @@ func parseEnhancedLine(text string) (string, []Cue) {
 
 		word := text[textStart:textEnd]
 		if word == "" {
+			// Adjacent markers can close the previous word before the next one starts.
+			if i > 0 && lastTextMarker == i-1 {
+				previous := &segments[len(segments)-1]
+				if timeMs >= previous.start {
+					previous.end = &timeMs
+				}
+			}
 			if i == len(matches)-1 {
 				trailingEnd = &timeMs
 			}
@@ -296,6 +305,7 @@ func parseEnhancedLine(text string) (string, []Cue) {
 			rawStart: rawStart,
 			rawEnd:   rawValue.Len(),
 		})
+		lastTextMarker = i
 	}
 
 	if len(segments) == 0 {
@@ -321,13 +331,14 @@ func parseEnhancedLine(text string) (string, []Cue) {
 
 		cues = append(cues, Cue{
 			Start:     &start,
+			End:       seg.end,
 			Value:     finalRaw[byteStart:byteEnd],
 			ByteStart: byteStart - leftTrimBytes,
 			ByteEnd:   byteEnd - leftTrimBytes - 1,
 		})
 	}
 
-	if trailingEnd != nil && len(cues) > 0 {
+	if trailingEnd != nil && len(cues) > 0 && cues[len(cues)-1].End == nil {
 		cues[len(cues)-1].End = trailingEnd
 	}
 

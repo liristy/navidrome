@@ -246,6 +246,21 @@ var _ = Describe("parseLRC", func() {
 		}))
 	})
 
+	It("should preserve explicit Enhanced LRC word ends before pauses", func() {
+		lyrics, err := parseLRC("xxx", "[00:01.00][00:03.00]<00:01.00>Some <00:01.25><00:01.55>words<00:02.00>")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(lyrics.Line).To(HaveLen(2))
+		Expect(lyrics.Line[0].Value).To(Equal("Some words"))
+		Expect(lyrics.Line[0].Cue).To(Equal([]Cue{
+			{Start: new(int64(1000)), End: new(int64(1250)), Value: "Some ", ByteStart: 0, ByteEnd: 4},
+			{Start: new(int64(1550)), End: new(int64(2000)), Value: "words", ByteStart: 5, ByteEnd: 9},
+		}))
+		Expect(lyrics.Line[1].Cue).To(Equal([]Cue{
+			{Start: new(int64(3000)), End: new(int64(3250)), Value: "Some ", ByteStart: 0, ByteEnd: 4},
+			{Start: new(int64(3550)), End: new(int64(4000)), Value: "words", ByteStart: 5, ByteEnd: 9},
+		}))
+	})
+
 	It("should shift a trailing Enhanced LRC marker for repeated line occurrences", func() {
 		lyrics, err := parseLRC("xxx", "[00:10.00][00:30.00]<00:10.10>Hello <00:10.50>world<00:10.90>")
 		Expect(err).ToNot(HaveOccurred())
